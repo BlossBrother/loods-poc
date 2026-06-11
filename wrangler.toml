@@ -1,0 +1,125 @@
+name = "fresh-forward-intranet"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+# Niet-geheime config staat hier; geheimen (tokens) zijn secrets:
+#   npx wrangler secret put PORTAL_SECRET     (klantenportaal; willekeurige lange string)
+#   npx wrangler secret put RESEND_API_KEY    (mail voor magic-link; optioneel)
+[vars]
+# Externe app-snelkoppelingen op het intranet (vul jullie eigen URL/subdomein in).
+BUDDEE_URL = "https://app.buddee.nl"
+TIMECHIMP_URL = "https://app.timechimp.com"
+
+# Bezoekers-feature staat UIT (interne discussie). Op "true" + Team-tab vervangen
+# door Bezoek-tab in layout.ts om terug te zetten.
+BEZOEK_ENABLED = "false"
+
+# WK-poule: plak hier de uitnodigingslink van je Scorito-vriendenpoule.
+# Leeg laten = de tegel linkt naar scorito.com.
+WK_POULE_URL = "https://www.scorito.com/subleague/1170117/wk-voetbal-2026/fresh-league/836a2693-8451-439c-85f5-338063c8b024"
+
+# Beheerders: e-mailadressen die altijd toegang hebben tot /beheer (komma-gescheiden).
+# Naast deze lijst is iedereen met Rol=Beheerder in Medewerkers ook beheerder.
+BEHEERDER_EMAILS = "peterjan.vaningen@fresh-forward.nl"
+
+# AVG: automatische opschoning van bezoekmeldingen.
+# Staat UIT tot je 'm bewust aanzet. Zet op "true" om te activeren.
+AVG_CLEANUP_ENABLED = "false"
+RETENTIE_DAGEN = "90"
+
+# Klantenportaal (/portaal). Basis-URL voor de magic-link in de mail + afzender.
+PORTAL_BASE_URL = "https://fresh-forward-intranet.peterjan-vaningen.workers.dev"
+RESEND_FROM = "Fresh Forward <portaal@fresh-forward.nl>"
+
+# Pushmeldingen (web push). De publieke sleutel mag hier; de privesleutel is een secret:
+#   npx wrangler secret put VAPID_PRIVATE_KEY
+VAPID_PUBLIC_KEY = "BInbwHoTbWbvKwnfrKEzCdu8H_9F_WOv3CxUnnJgzCGZOSs7ik2Z0JZXUaY7DkQXIkFuvfEV_bcPVhQl2031lrA"
+VAPID_SUBJECT = "mailto:peterjan.vaningen@fresh-forward.nl"
+
+# Cloudflare Access-groep-sync (v187): de Access-groep "Uitzendkrachten" volgt
+# automatisch Beheer → Medewerkers (rol Uitzendkracht). Eenmalige setup:
+#   1. Access controls → Policies → tab "Rule groups" → groep "Uitzendkrachten"; ID hieronder.
+#   2. Allow-policy op de intranet-app (Access controls → Applications) naar die groep
+#      laten verwijzen + One-time PIN aanzetten (Integrations → Identity providers).
+#   3. API-token met Account → "Access: Organizations, Identity Providers, and
+#      Groups" → Edit:  npx wrangler secret put CF_API_TOKEN
+# Leeg laten = sync staat uit (beheer werkt gewoon).
+CF_ACCOUNT_ID = "fcd5d1933b6b831d32828ceb27511fac"
+CF_ACCESS_GROUP_ID = "6a190078-86fe-4d61-b089-d0caad4fdf97"
+
+# Auth-hardening (aanrader in productie): volledige Access-JWT-verificatie.
+# Vul beide in vanuit het Cloudflare Access-dashboard om te activeren; daarna deployen.
+# ACCESS_TEAM_DOMAIN = ""
+# ACCESS_AUD = ""
+
+# Dagelijkse cron (03:00 UTC) die de AVG-opschoning draait als die aanstaat.
+[triggers]
+crons = ["0 3 * * *"]
+
+# D1 = de hoofddatabase (vervangt Airtable). Schema in migratie/schema.sql.
+[[d1_databases]]
+binding = "DB"
+database_name = "fresh-forward-db"
+database_id = "db5f9671-5f68-459c-a41e-5accece9233e"
+
+# R2-opslag voor geuploade documenten en afbeeldingen.
+[[r2_buckets]]
+binding = "DOCS"
+bucket_name = "ff-documenten"
+
+# Workers AI — inline vertaling ("Vertaal dit", model m2m100). Geen extra secret nodig.
+[ai]
+binding = "AI"
+
+# ---- Kennisbank/vraagbaak (RAG) — Vectorize -------------------------
+# Eenmalige setup vóór je dit aanzet:
+#   npx wrangler vectorize create ff-kb --dimensions=768 --metric=cosine
+# Index 'ff-kb' bestaat — binding actief. Na deploy: herindexeren via /zoek (beheerder).
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "ff-kb"
+
+# =====================================================================
+#  TEST-OMGEVING (staging) — deploy met:  npx wrangler deploy --env test
+#  Aparte Worker + eigen D1/R2/Vectorize/secrets. Raakt productie niet.
+#  Zie TEST-OMGEVING.md voor de eenmalige setup (R2-bucket, Vectorize, secrets).
+# =====================================================================
+[env.test]
+name = "fresh-forward-intranet-test"
+
+[env.test.vars]
+BUDDEE_URL = "https://app.buddee.nl"
+TIMECHIMP_URL = "https://app.timechimp.com"
+BEZOEK_ENABLED = "false"
+WK_POULE_URL = "https://www.scorito.com/subleague/1170117/wk-voetbal-2026/fresh-league/836a2693-8451-439c-85f5-338063c8b024"
+BEHEERDER_EMAILS = "peterjan.vaningen@fresh-forward.nl"
+AVG_CLEANUP_ENABLED = "false"
+RETENTIE_DAGEN = "90"
+PORTAL_BASE_URL = "https://fresh-forward-intranet-test.peterjan-vaningen.workers.dev"
+RESEND_FROM = "Fresh Forward <portaal@fresh-forward.nl>"
+VAPID_PUBLIC_KEY = "BInbwHoTbWbvKwnfrKEzCdu8H_9F_WOv3CxUnnJgzCGZOSs7ik2Z0JZXUaY7DkQXIkFuvfEV_bcPVhQl2031lrA"
+VAPID_SUBJECT = "mailto:peterjan.vaningen@fresh-forward.nl"
+# Test-Worker staat NIET achter Cloudflare Access. DEV_MODE geeft je een vaste
+# beheerder-identiteit zodat je meteen kunt proefdraaien. ZET HIER GEEN ECHTE DATA NEER.
+DEV_MODE = "true"
+DEV_EMAIL = "peterjan.vaningen@fresh-forward.nl"
+
+[[env.test.d1_databases]]
+binding = "DB"
+database_name = "fresh-forward-db-test"
+database_id = "5e730e65-b869-424b-8070-21d3acf268c9"
+
+[[env.test.r2_buckets]]
+binding = "DOCS"
+bucket_name = "ff-documenten-test"
+
+[env.test.ai]
+binding = "AI"
+
+# Vectorize voor de test-vraagbaak. Maak eerst de index aan, daarna deze 3 regels
+# uit commentaar halen en opnieuw deployen:
+#   npx wrangler vectorize create ff-kb-test --dimensions=768 --metric=cosine
+#   npx wrangler vectorize create-metadata-index ff-kb-test --property-name=audience --type=string
+# [[env.test.vectorize]]
+# binding = "VECTORIZE"
+# index_name = "ff-kb-test"

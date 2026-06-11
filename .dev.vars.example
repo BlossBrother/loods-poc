@@ -1,0 +1,29 @@
+# Kopieer dit bestand naar .dev.vars (niet in git) voor lokaal draaien.
+# Maak een Airtable Personal Access Token aan op https://airtable.com/create/tokens
+# met scopes: data.records:read, data.records:write.
+# BELANGRIJK: geef het token toegang tot BEIDE bases:
+#   - Fresh Forward Platform        (appfamE6fOFcwcONn)
+#   - Bezoekersregistratie (iPad)   (appXsofo09R8Qax8q)  -> alleen lezen nodig
+AIRTABLE_TOKEN=pat_xxxxxxxxxxxxxxxxxx
+
+# Lokaal draaien zonder Cloudflare Access: zet DEV_MODE aan.
+# Dan ben je automatisch beheerder en is er geen Access-login nodig.
+# LAAT DIT WEG in productie (anders is iedereen beheerder)!
+DEV_MODE=true
+
+# Klantenportaal: geheim voor het ondertekenen van magic-link tokens + sessies.
+# Verzin een lange willekeurige string (in productie: wrangler secret put PORTAL_SECRET).
+PORTAL_SECRET=verzin-hier-een-lange-willekeurige-string
+
+# Optioneel lokaal: mailprovider voor de magic-link. Zonder deze wordt de link
+# naar de console gelogd (zichtbaar in de terminal / wrangler tail).
+# RESEND_API_KEY=re_xxxxxxxx
+# RESEND_FROM=Fresh Forward <portaal@fresh-forward.nl>
+
+# Pushmeldingen: de privesleutel die hoort bij VAPID_PUBLIC_KEY in wrangler.toml.
+# NOOIT een echte sleutel in dit bestand zetten (dit voorbeeld gaat mee in git!).
+# In productie: wrangler secret put VAPID_PRIVATE_KEY
+VAPID_PRIVATE_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Server-naar-server pushen vanuit een andere Worker (bearer-sleutel).
+PUSH_API_KEY=ff_v1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
