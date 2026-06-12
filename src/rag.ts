@@ -173,7 +173,7 @@ export async function webZoek(env: Env, vraag: string): Promise<{ answer: string
         { role: "user", content: `Webfragmenten:\n${ctx}\n\nVraag: ${vraag}` },
       ],
     });
-    const answer = String((r as { response?: string }).response ?? "").trim();
+    const answer = String((r as any).response ?? (r as any).choices?.[0]?.message?.content ?? "").trim();
     if (!answer) return null;
     return { answer, sources: hits.map((h) => ({ title: h.title.slice(0, 80), url: h.url })) };
   } catch {
@@ -193,7 +193,7 @@ export async function algemeenAntwoord(env: Env, vraag: string): Promise<string>
       { role: "user", content: vraag },
     ],
   });
-  return String((res as { response?: string }).response ?? "").trim() || "Daar heb ik zo geen antwoord op.";
+  return String((res as any).response ?? (res as any).choices?.[0]?.message?.content ?? "").trim() || "Daar heb ik zo geen antwoord op.";
 }
 
 export async function ask(env: Env, question: string, opts: { audiences?: string[]; lang?: string } = {}): Promise<AskResult> {
