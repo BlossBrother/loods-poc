@@ -9,6 +9,332 @@
 
 ---
 
+### v207 — Chips-rij alleen horizontaal scrollbaar  (PWA ff-v179)
+- De header-chips op home waren ook verticaal sleepbaar (PJ): de onzichtbare
+  44px-hit-area (::after, inset -6px) stak boven/onder de rij uit, en bij
+  overflow-x:auto wordt overflow-y impliciet ook auto. Fix: verticale padding
+  in de rij (6px, marges gecompenseerd: 13/2 → 7/-4) zodat de hit-area past,
+  plus expliciet overflow-y:hidden en touch-action:pan-x.
+
+### v206 — AI-webzoek (Tavily) + analytics-dashboard  (PWA ff-v178, meegeleverd in v207)
+- **Webzoek in de assistent-keten** (TAVILY_API_KEY staat als secret): de keten is
+  nu intern zoeken → kennisbank (bronnen) → **web** → algemene kennis. `webZoek()`
+  (rag.ts): Tavily basic search (1 credit), top-5 fragmenten, NL-samenvatting via
+  het eigen LLM, bronchips openen in een nieuw tabblad (target=_blank), label
+  "Van het web (AI)". Webzoek is een verrijking: elke fout valt stil terug op
+  algemene kennis. Gratis tier = 1.000 credits/mnd — alleen échte vragen die de
+  kennisbank niet kent kosten een credit.
+- **Beheer → Analytics (nieuwe tegel)**: geaggregeerd, privacyvriendelijk
+  (alleen tellingen): actief deze week/vandaag (user_module_seen, x/N + %),
+  assistent-vragen 7d + % intern beantwoord (ask_log), ochtendvraag-respons
+  vandaag (aanwezigheid_status), prikbord 7d (posts+polls), leesregistraties
+  (gezien/bevestigd). Plus: activiteit-per-dag-staafjes (14d) en module-bereik
+  (unieke gebruikers per module, 7d) — pure CSS, geen chart-library
+  (HONK §7.4: dependencies snoeien). Elke bronquery defensief; src/analytics.ts.
+  Meet vanaf nu het effect van de adoptie-acties en nieuwe features.
+
+### v205 — RSVP op events + aanwezigheid als chip + nieuws-cascade  (PWA ff-v177, meegeleverd in v206)
+- **RSVP ("Ben je erbij?")** op agenda-event-detail: Ja/Nee-knoppen + teller +
+  voornamen ("7 collega's komen — Anna, Bram, …"), idempotent per persoon,
+  omschakelen kan altijd. Alleen op (semi-)toekomstige events; defensief zonder
+  tabel. **Migratie 0006_event_rsvp.sql** (PJ draait 'm op live D1). Op tijd voor
+  de Fresh BBQ van 3 juli. POST /agenda/event/:id/rsvp.
+- **Aanwezigheid als chip** (PJ): "Vandaag"-chip bovenin de header-rij (naast
+  WK-poule/Buddee/TimeChimp) mét afwezigen-teller → /vandaag. De afwezigen-regel
+  in de vandaag-kaart is weg; de one-tap-statusvraag (v204) blijft als actie.
+  Literatuur-onderbouwing: ambient info hoort glanceable (chip + teller),
+  de eigen actie verdient de kaart-positie. WK-poule-chip verdwijnt na het WK.
+- **Nieuws-verwijder-cascade** (zelfde patroon als agenda v203): notificaties
+  (match "nieuws-<id>") + kennisbank-doc `kbnws_<id>` gaan mee weg.
+- **AI-webzoek voorbereid (besluit)**: Brave Search API is niet meer gratis
+  (melding PJ) → **Tavily**: 1.000 gratis credits/maand, geen creditcard
+  (basic search = 1 credit). PJ maakt key op tavily.com en zet
+  `npx wrangler secret put TAVILY_API_KEY`; de keten-integratie volgt als v207.
+
+### v204 — "Waar werk je vandaag?"-ochtendflow + avatar-fix  (PWA ff-v176, meegeleverd in v205)
+- **Ochtend-push (08:15 Amsterdam, ma-vr)**: "Waar werk je vandaag?" met deeplink
+  naar /vandaag. Slim: alléén naar wie vandaag nog geen status heeft én niet met
+  verlof is (Buddee); opt-out per gebruiker via Notificaties → Voorkeuren
+  (nieuwe module-key 'team'); eenmaal-per-dag-slot in app_settings. Twee
+  UTC-crons (06:15/07:15, ma-vr) dekken zomer/wintertijd; de code checkt
+  Amsterdam-uur==8. Nachttaken blijven exclusief bij de 03:00-run
+  (controller.cron-gate). wrangler.toml: 3 cron-triggers.
+- **One-tap-vraag op home** (PJ's idee, niet-opdringerige variant): bovenin de
+  VANDAAG-kaart "Waar werk je vandaag? [Kantoor][Thuis][Op pad]" — alleen ma-vr
+  én alleen zolang je nog niets hebt ingevuld; één tik → POST /vandaag →
+  terug naar verse home (?ok= omzeilt de SW-cache). Bewust GEEN blokkerende
+  vraag bij het openen — te opdringerig, went tegen.
+- **Afwezigen-tegel gedempt** (PJ: "te dominant"): van tile-rij naar een rustige
+  één-regel-link onderin de vandaag-kaart ("5 collega's afwezig · Anna, Bram en
+  3 anderen →").
+- **Avatar-links-fix**: een latere `.hava`-regel zette margin-left:10px en won
+  van de v202-auto-marge — nu staat auto in de hoofdregel zelf; avatar weer
+  rechts.
+
+### v203 — Verwijderen = overal weg + notificaties wisbaar + TS-fix  (PWA ff-v175, meegeleverd in v204)
+- **Cascade bij event-verwijderen** (melding PJ: "lollig" agendapunt bleef in
+  ieders notificatiecentrum staan én werd nog geïndexeerd): /agenda/:id/delete
+  ruimt nu via waitUntil ook op: (1) notificatie-rijen van dit event bij ALLE
+  ontvangers (`verwijderNotificatiesVoorUrl`, match op /agenda/event/<id>), en
+  (2) het kennisbank-doc `kbev_<id>` incl. vectoren (`removeDoc` in rag.ts,
+  gedeeld met Kennisdump-verwijderen). NB: een push die al op een toestel is
+  AFGELEVERD kan technisch niet worden teruggetrokken — het notificatiecentrum,
+  de badge-bron en de zoek/assistent-index zijn wél direct schoon. Bij
+  "Ongedaan maken" komen notificaties niet terug (bewust); het event zelf wel,
+  en de index herstelt bij de eerstvolgende (her)index.
+- **Notificaties zelf wisbaar**: ✕-knop per notificatie + "Alles wissen"
+  (alleen je eigen rijen; POST /notificaties/verwijder).
+- **TS-fout kennisdump-upload gefixt** (PJ's tsc-log): workers-types typt
+  formData.getAll() als string[] — cast naar (string|File)[] met type-guard.
+- **Nafix (tsc PJ)**: rag.ts had al een oudere `removeDoc` (alleen
+  chunks/vectoren) — dubbele declaratie verwijderd; de complete versie (incl.
+  kb_docs-rij) blijft. En een dieper lek gedicht: `syncIntranetContent`
+  her-indexeerde agenda-events ZONDER deleted-filter, waardoor een verwijderd
+  event bij de eerstvolgende reindex terug in de assistent kwam —
+  `WHERE deleted_at IS NULL` toegevoegd.
+- Open punt voor later: zelfde cascade voor nieuws-verwijderen (urls
+  /nieuws#nieuws-<id>) — agenda was de acute klacht.
+
+### v202 — Kennisdump + assistent is dé zoek-ingang  (PWA ff-v174, meegeleverd in v203)
+**Kennisdump (Beheer → Kennisdump, nieuw):** drop PDF/Word/tekst/foto's en de AI
+doet de rest — geverifieerd op Cloudflare-docs (`env.AI.toMarkdown`, GA sinds
+maart 2025; PDF/Word/afbeeldingen-met-AI-beschrijving).
+- Pipeline (src/kennisdump.ts): origineel → R2 (`kennisdump/<id>/…`, DOCS-bucket)
+  → toMarkdown → llama-categorisatie (titel/categorie ras|teelt|nieuwsbrief|
+  beleid|handleiding|overig/1-zin-samenvatting/klant-suggestie) → kb_docs →
+  `indexDoc` (chunks+embeddings+Vectorize) → direct vindbaar in de assistent.
+- **Veiligheidsregel**: alles landt als 'internal'. "Klant-zichtbaar maken"
+  (portaal-vraagbaak) is een expliciete beheerknop; de AI mag alléén suggereren
+  (✦-label). Uitzetten kan ook; verwijderen ruimt vectoren+chunks+doc+log op.
+- Migratie **0005_kennisdump.sql** (kennisdump_log) — PJ draait 'm op de live D1.
+  Zonder tabel blijft de pagina werken (lege lijst); verwerken vergt 'm wel.
+- Beheer-tegel toegevoegd. Max 8 bestanden/keer, 15MB/stuk, body afgekapt op
+  200k tekens.
+**Header gestroomlijnd (PJ):** vergrootglas weg — sparkle/assistent is dé
+zoek-ingang (zoekt intern én beantwoordt vragen); avatar erft de auto-marge.
+/zoek blijft bestaan (zijbalk + deep links).
+
+### v201 — Assistent-keten gefixt + audit-opvolging 12/6  (PWA ff-v173, meegeleverd in v202)
+- **Assistent gaf geen algemeen antwoord (screenshot "hoeveel kassen")**: de RAG
+  vond vaag verwante chunks en antwoordde "kan ik niet vinden in de context" —
+  formeel een antwoord, dus de fallback sloeg niet aan. De agent-keten BEOORDEELT
+  het interne antwoord nu (weigering-detectie) en schakelt dan alsnog door naar
+  het gelabelde algemene-kennis-antwoord. Keten: intern zoeken → kennisbank-RAG →
+  beoordelen → algemene kennis. Echte web-zoektocht (live bronnen) = vervolgstap,
+  vergt een zoek-API (Brave/Tavily) + key.
+- **iOS-toetsenbordzoom op de assistent**: invoerveld stond op ~14,7px; onder
+  16px zoomt iOS de pagina in bij focus. Nu 16px — geen auto-zoom meer. Sheet
+  volgt het toetsenbord bovendien via visualViewport (de --ff-kb-var werd niet
+  overal bijgehouden).
+- **Audit §5.1**: try/catch rond alle drie startViewTransition-aanroepen
+  (InvalidStateError bij snelle wissels, nu stil met directe render-fallback);
+  meldingen-empty-state heeft een CTA ("+ Melding maken" opent de sheet).
+- **Audit §C1 — vandaag-kop op home**: afwezigen-rij in de VANDAAG-kaart
+  ("5 collega's afwezig vandaag · Anna, Bram en 3 anderen" → /vandaag), zelfde
+  bron als /vandaag; AVG-default: alleen "afwezig", geen verloftype.
+- Nog open uit het rapport (volgende rondes): RSVP op events (BBQ 3/7),
+  pulse-surveys (ronde C), analytics-dashboard (ronde D), kantine-deadline-tekst,
+  snel-naar pinbaar; adoptie-acties zonder code (content-ritme, toernooi-seed,
+  AVG-afspraak agenda-items) liggen bij PJ.
+
+### v200 — AI-assistent: sparkle-knop + zoek-en-vraag-sheet  (PWA ff-v172, meegeleverd in v201)
+Idee PJ ("linksboven is ruimte voor een AI-knop") + aanscherping: combinatie van
+intern zoeken en AI-antwoorden.
+- **Sparkle-knop linksboven** in de shell-header (die plek was vrij: burger staat
+  op display:none, titel hangt gecentreerd). Haptiek doet mee.
+- **Assistent-sheet** (nieuw, in het shell-chroom — gesprek blijft staan tijdens
+  navigeren): bottom-sheet met chatweergave, keyboard-safe (--ff-kb), Escape/scrim
+  sluit, tik op een treffer sluit de sheet en navigeert via de SPA-router.
+- **`POST /api/assist`**: altijd interne FTS-treffers (zoekFts, max 3 per groep,
+  6 getoond); is de invoer een echte vraag (?, vraagwoord of ≥5 woorden) dan ook
+  een AI-antwoord: eerst kennisbank-RAG (mét bronchips), weet die het niet →
+  `algemeenAntwoord()` (rag.ts, Workers AI) met label "Algemene kennis (AI)" —
+  zodat "hoeveel kassen staan er in Nederland?" gewoon antwoord krijgt zonder dat
+  iemand het voor intern beleid aanziet. Zelfde rate-limit (6/min) + ask_log als
+  /api/ask; /api/ask en /zoek blijven ongewijzigd bestaan.
+
+### v199 — STRUCTUREEL: home in de shell  (PWA ff-v171, meegeleverd in v200)
+Antwoord op PJ's vraag "is home wel hetzelfde gebouwd als de modules?" — nee, en
+dát was de bron van het stotteren: home was een losstaand document (volledige
+herlaad per bezoek), modules zijn shell-pagina's (alleen content-swap). Nu is
+home óók een shell-pagina.
+- **Nieuw**: `homeShellContent()` + `HOME_SHELL_CSS` in home2.ts — de home-feel
+  (begroeting-hero, chips, vandaag-rail, actiekaarten, nieuws-cover, snel-naar-
+  grid) 1-op-1 geport; CSS gescoped onder `.hm` met eigen `--hm-*`-tokens
+  (licht/donker), dus de look hangt niet af van shell-tokens.
+- **Keuzes PJ (12/6)**: begroeting scrolt mee als content-hero (Today-patroon);
+  eigen zoek-/profielknop uit de hero — die zitten al in de vaste shell-balk.
+  Entrance = de shell-stagger (zelfde als modules; .up-machinerie vervalt op home).
+- **Route "/"** rendert via `layout("Home", "/", …)`; de v192-routeruitzondering
+  voor "/" is verwijderd — terug naar home is nu een gewone SPA-content-swap
+  (geen herlaad, geen blob-herinit, scrollpositie blijft; profiteert ook van de
+  v198 race-venster-fix). SW-SWR voor "/" blijft voor de koude start.
+- **Vervallen op home**: eigen wabar/Meer-ballon/zijbalk/avatar — alles komt uit
+  de shell (zelfde nav-token, zelfde inhoud). Push-kaart + script verhuisden mee
+  de content in (router voert scripts opnieuw uit).
+- **Rollback**: `loodsHome()` (standalone pagina) blijft onaangetast in home2.ts;
+  route terugzetten = 1 regel.
+- Checken na deploy: home↔module net zo vloeiend als agenda↔prikbord; begroeting
+  stabiel; capsule blijft staan bij elke wissel; push-kaartje werkt op home.
+
+### v198 — SPA-stotter: één render i.p.v. dubbele swap  (PWA ff-v170)
+- Video 14:22 (12 jun): pagina kwam netjes binnen maar "knipperde" direct daarna.
+  Oorzaak: SWR toonde eerst de cache-versie (mét view-transition) en deed daarna
+  bij élk byte-verschil een stille tweede `innerHTML`-swap — waardoor de
+  `fadeUp`-entree-animaties op alle kaarten opnieuw afspeelden. Twee fixes:
+  1. **Race-venster (120ms)**: het netwerk krijgt eerst de kans; is de verse
+     pagina binnen 120ms binnen, dan is er maar één render en bestaat de stille
+     tweede swap niet eens (idee PJ's vriend: eerst de promise, dán de transitie).
+  2. **`main.ff-noanim`** tijdens de stille revalidate: entree-animaties staan uit
+     bij de tweede, onzichtbare swap; bij echte navigaties wordt de klasse weer
+     verwijderd zodat fadeUp gewoon speelt.
+- BUILD v198 / PWA-cache ff-v170 (offset 28 ✓). Alleen `views/layout.ts` + `pwa.ts`.
+
+### v197 — Hangende oude header bij home↔module gefixt  (PWA ff-v169)
+- Video 14:22: groet stabiel ✓, tabbar config-gedreven ✓, maar de oude header bleef
+  op volle dekking over de nieuwe pagina hangen tijdens de overgang. Oorzaak: voor
+  `ff-header`/`ff-botnav` stond alléén `animation:none` op old+new — dan laat de
+  browser de OUDE snapshot op opacity 1 staan voor de duur van de transitie. Binnen
+  de shell onzichtbaar (headers identiek), home↔module zichtbaar fout.
+- Fix (home2 + layout synchroon): `old{opacity:0}` + `new{opacity:1}` — nieuwe
+  header/capsule staan er direct, content fadet sequentieel (v195). Dubbele
+  v191-regel in home2 opgeruimd.
+- NB suggestie "promise eerst, dan transitie": klopt — en zo werkt de SPA-router al
+  (fetch → dan startViewTransition). Home↔module is cross-document (browser bepaalt
+  het moment); daar was de snapshot-styling de boosdoener, niet de volgorde.
+
+### v196 — Capsule-tabbar volgt module-config  (PWA ff-v168, meegeleverd in v197)
+Reviewfeature 6 ("dynamische pill"), vertaald naar onze architectuur: geen client-
+registry/bootstrap nodig — de server rendert de tabs uit dezelfde bron als
+zijbalk/ballon-menu.
+- **Shell (layout.ts bottomNav)**: Home + de eerste 3 INGESCHAKELDE modules in
+  beheer-volgorde (nav-token; fallback mod:-tokens) + Meer. Rol-gates via
+  `mayShowRole` (CRM alleen met rol); klassieke tab-iconen blijven voor
+  agenda/prikbord/meldingen, overige modules krijgen hun zijbalk-icoon.
+- **Home (home2.ts wabar)**: zelfde regels via `enabledOrder` (al gefilterd voor
+  uitzendkrachten/module aan/uit); interface `badges` → generiek `tabs[]` met
+  badge-teller per moduleKey (foryou). Blob-breedte volgt het tab-aantal
+  (`--tabs` op de wabar) — geen stotter bij minder/meer tabs.
+- Overloop zit als vanouds onder Meer (ballon/drawer toont alle modules).
+  Server-side blijft de waarheid: URL-guard + module-middleware (uit = redirect/403).
+- Acceptatie (reviewdoc 6.6): module uitzetten in Beheer → Menu-indeling → tabbar
+  past zich aan na refresh; volgorde wijzigen = tabs schuiven mee.
+
+### v195 — Review-fixes schermopname 12/6 (10:01)  (PWA ff-v167, meegeleverd in v196)
+Bron: extern reviewdoc "Honk — Fixes n.a.v. schermopname". Mapping op onze
+(server-rendered) architectuur; bevinding 4 bleek de stagger-entrance, niet datafetching.
+- **#1 Groet her-randomiseerde per render (HIGH)**: `pickGreeting` accepteert nu een
+  seed (FNV-1a-hash); home geeft `email|datum|dagdeel` mee → zelfde groet de hele
+  dag(deel), wel per gebruiker/dag anders. Beheer-preview blijft random.
+  NB: "Moggel" is een beheer-variant (D1 `greeting_variants`), geen code — PJ checkt
+  via Beheer → Header of dat bewust is.
+- **#2 "FAB morpht naar avatar" (HIGH)**: dubbele oorzaak aangepakt: (a) FAB heeft nu
+  een eigen `view-transition-name:ff-fab` (kan nooit met iets anders paren, fadet
+  sequentieel); (b) home-avatar laadde lazy met groene gradient-fallback — de "groene
+  cirkel over de profielfoto" — nu `fetchpriority=high`, niet lazy.
+- **#3 Dubbele belichting (MEDIUM)**: paginatransitie sequentieel i.p.v. crossfade —
+  out .11s, in .16s met .09s delay (+8px rise), `group(page)` animeert niet meer
+  (voorkwam ook geometrie-morphs). Home en shell synchroon.
+- **#4 Pop-in op home (MEDIUM)**: entrance-stagger speelt alleen nog bij het eerste
+  home-bezoek van de sessie (`sessionStorage ff_h1` → `:root.ff-revisit`); terugkeer
+  toont alles in één frame. (SWR-cache deed v192 al.)
+- **#5 Opruim (LOW)**: "+ Event"-knop weg uit de agenda-toolbar (FAB = zelfde actie);
+  clearance onder content verruimd naar 148px (FAB + capsule, shell én home).
+  5d (prikbord-welkomsttekst eindigt zonder punt) = content in D1, geen code.
+- **Niet in deze ronde**: reviewfeature 6 (tabbar dynamisch uit module-config) —
+  voorgesteld als eigen ronde; nav-token + URL-guards bestaan al, alleen de
+  capsule-rendering (layout.ts + home2.ts) moet de config volgen.
+
+### v194 — "Gelezen"-knop uitschakelbaar + stille gezien-registratie  (PWA ff-v166, meegeleverd in v195)
+- **Vlag `lees_knop`** (default UIT, toggle in Beheer → Menu-indeling): bepaalt of
+  medewerkers de "Gelezen"-knop zien op nieuws/Beleid-documenten. Uit = ook geen
+  must-read-banner op home (er valt niets te bevestigen).
+- **Ghost-registratie**: het openen van /nieuws of /documenten registreert stil
+  "gezien" per item (`registreerGezien` in leesbevestiging.ts, doel_types
+  `nieuws_gezien`/`document_gezien` in dezelfde tabel, idempotent, via waitUntil —
+  geen vertraging voor de gebruiker). Bestaande bevestigingen blijven bewaard.
+- **Beheer → Leesbevestiging** toont nu per item "x gezien" naast "y/N bevestigd",
+  met uitklapbaar wie (Bevestigd: … / Gezien: …).
+- NB AVG: registratie is functioneel (compliance-inzicht voor beheer), zelfde
+  grondslag als de bestaande leesbevestiging; alleen zichtbaar voor beheerders.
+
+### v193 — Blob-stotter + traag verlaten van home (video 2, 12/6)  (PWA ff-v165, meegeleverd in v194)
+- **Blob stotterde bij aankomst op home**: home miste de shell-gating — de blob
+  animeerde bij elke laad vanaf z'n default-positie (en dat werd zichtbaar nu home
+  instant uit cache komt). Fix: blob start statisch exact op de Home-positie
+  (`translateX(7px)` + breedte `calc((100%-14px)/5)`), animatie pas ná de eerste
+  JS-plaatsing via `.wabar.anim` (zelfde patroon als shell `.botnav.anim`).
+- **240ms-navigatie-uitstel op de home-tabbar verwijderd**: dat uitstel diende de
+  blob-glide vóór er view transitions waren; sinds v191 is het pure vertraging.
+  Tik = blob verspringt direct + browser navigeert meteen.
+- **Laad-dim bij verlaten van home** (`html.navving main{opacity:.55}`): de view
+  transition bevriest het oude beeld tot de nieuwe pagina er is — zonder feedback
+  voelt dat traag. Content dimt nu direct bij de tik (tabbar + ballon-menu);
+  `pageshow` haalt de dim weer weg (back/bfcache).
+- **SWR-guard**: home-cache slaat `?ok=`-redirects over — na een eigen actie zie
+  je altijd de verse home, niet de stale gecachte.
+
+### v192 — Must-read-banner + home-laadfix (video-melding PJ)  (PWA ff-v164, meegeleverd in v193)
+- **Must-read-banner op home** (rapport §3.1): recente nieuwsberichten (≤14 dagen)
+  zonder leesbevestiging van de gebruiker tonen als vaste kaart bovenaan
+  ("1 bericht wacht op je leesbevestiging" → deep-link; meerdere → /nieuws).
+  Accent-tile (`.mread`); telt mee in de "Alles is bij"-conditie. Data via
+  bestaand `gelezenDoor()` (v185), guard op nieuws-module + e-mail.
+- **Home laadde telkens traag + "hangende" header** (video 12/6, geanalyseerd):
+  (1) module→home: de SPA-router toonde een skeleton, ontdekte dan dat home geen
+  app-layout heeft en deed alsnog een volledige navigatie — dubbel laden. Fix:
+  router slaat "/" over (`eligible()`-guard in layout.ts).
+  (2) De service worker haalde home network-first op terwijl de home-route
+  server-side Airtable-werk doet (nieuws + medewerkers) — elke keer wachten.
+  Fix: "/" is nu stale-while-revalidate in de SW (pwa.ts): cache direct tonen,
+  vers antwoord op de achtergrond; deploy-vers blijft geborgd door de
+  CACHE-bump per deploy. Home→module blijft een volle navigatie, maar header +
+  capsule blijven nu visueel staan dankzij de cross-doc View Transitions (v191).
+  Vervolg (HONK fase 2/3, na baseline): Airtable server-side cachen.
+- v191 + v192 deployen samen (BUILD v192 / PWA-cache ff-v164).
+
+### v191 — Ronde A polish: home-pariteit met shell + HONK-tokens  (PWA ff-v163, meegeleverd in v192)
+Bron: RAPPORT-diepteonderzoek-user-succes-juni2026.md + HONK-DEEP-POLISH-PERFORMANCE.md.
+- **Cross-document View Transitions op home**: home2 had de `@view-transition`-regel
+  niet, dus home↔shell was een harde wissel terwijl shell↔shell al vloeide. Home heeft
+  nu hetzelfde VT-blok als de shell (content fadet via `page`, header `ff-header` en
+  capsule `ff-botnav` blijven staan) — de capsule-tabbar blijft nu visueel staan bij
+  navigatie van/naar home. Reduced-motion zet alle VT-pseudo's uit (beide bestanden).
+- **Capsule krimpt bij scrollen op home** (`.wabar.mini`, pariteit met shell
+  `.botnav-inner.mini`): omlaag scrollen + y>80 → translateY(6px) scale(.9); omhoog =
+  terug. Let op: transform bevat de positionerings-translateX(-50%) — niet weghalen.
+- **Haptiek op home** (pariteit met shell): zelfde patroon — navigator.vibrate(6) met
+  iOS-Taptic-fallback via verborgen `switch`-checkbox `#ff-haptic-switch`; tik op
+  wtab/chip/iconbtn/pill/ghost/qcard/acard/titem/kantine.
+- **Motion-tokens (HONK §9.1)**: `--dur-press/--dur-enter/--stagger/--ease-spring`
+  toegevoegd als aliassen op de bestaande Laag-0-motion (shell) én in home2 (dat geen
+  tokens had). Home-entrance volgt nu HONK: .42s, stagger 40ms, max 6 stappen
+  (was .55s/50ms ongelimiteerd); `.press` op `--dur-press`.
+- **Touch-targets (HONK §3.4)**: header-chips op home waren ~32px hoog; hit-area nu
+  ≥44px via onzichtbare `::after` (inset -6px verticaal) — visueel ongewijzigd.
+- **iOS native-feel (HONK C1/C2, deels)**: UI-chroom (header-knoppen, chips, capsule,
+  Meer-menu, pills) niet meer selecteerbaar + geen long-press-callout; content blijft
+  selecteerbaar; inputs expliciet selecteerbaar. Verouderd
+  `-webkit-overflow-scrolling:touch` overal verwijderd (genegeerd sinds iOS 13,
+  veroorzaakte historisch renderbugs — HONK Appendix C).
+- **Niet gedaan (bewust, volgende rondes)**: optimistic-UI-dekking alle modules,
+  empty/error-states per view, badge-beleid, edge-cache/summary-endpoints/perf-budgets
+  (HONK fase 0/2/3 vergen metingen op PJ's machine). HONK-plan staat in
+  HONK-DEEP-POLISH-PERFORMANCE.md; mapping in RAPPORT-HONK-stand-van-zaken.md.
+
+### v190 — Sleutelrotatie na GitGuardian-melding + push-herstel  (PWA ff-v162)
+- **Incident**: bij de eerste GitHub-push bleken de VAPID-privésleutel en de
+  PUSH_API_KEY in documentatie/.dev.vars.example te staan (GitGuardian-alert).
+  Opgeruimd: placeholders in alle docs, repo-historie gewist en opnieuw gepusht,
+  beide sleutels geroteerd (nieuwe VAPID_PUBLIC_KEY in wrangler.toml; private +
+  PUSH_API_KEY alleen in de secret-store). Regel vastgelegd: geheimen bestaan
+  alleen in secrets/wachtwoordmanager — nooit in bestanden.
+- **Push-herstel na rotatie**: home detecteert een abonnement van het oude
+  sleutelpaar (applicationServerKey-vergelijking), meldt het af en toont het
+  "Meldingen aanzetten"-kaartje opnieuw; server-side telt 403 nu ook als
+  verlopen abonnement (opruiming oude subs). Collega's zetten meldingen dus
+  één keer opnieuw aan; de bezoeker-Worker heeft de nieuwe INTRANET_PUSH_SECRET nodig.
+
 ### v189 — Visuele overhaul: licht, schaduw, kleur (literatuur-gedreven)  (PWA ff-v161)
 - **Schaduwen = key + ambient** (Material/Fluent): elke elevatie bestaat nu uit een
   scherpe contact-laag + zachte afstands-laag, ink-getint (elev-3 verloor zijn

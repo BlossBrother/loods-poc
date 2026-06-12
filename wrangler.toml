@@ -33,7 +33,7 @@ RESEND_FROM = "Fresh Forward <portaal@fresh-forward.nl>"
 
 # Pushmeldingen (web push). De publieke sleutel mag hier; de privesleutel is een secret:
 #   npx wrangler secret put VAPID_PRIVATE_KEY
-VAPID_PUBLIC_KEY = "BInbwHoTbWbvKwnfrKEzCdu8H_9F_WOv3CxUnnJgzCGZOSs7ik2Z0JZXUaY7DkQXIkFuvfEV_bcPVhQl2031lrA"
+VAPID_PUBLIC_KEY = "BOy1wcFQtpwYi_E1MRh1ox7c3Zw7Q_kqsUYCpppE7EjUBWUrlYxN0iJ0w3EFYeaUc2Ko7hk5TnmdmyZo3XCyLuc"
 VAPID_SUBJECT = "mailto:peterjan.vaningen@fresh-forward.nl"
 
 # Cloudflare Access-groep-sync (v187): de Access-groep "Uitzendkrachten" volgt
@@ -52,9 +52,11 @@ CF_ACCESS_GROUP_ID = "6a190078-86fe-4d61-b089-d0caad4fdf97"
 # ACCESS_TEAM_DOMAIN = ""
 # ACCESS_AUD = ""
 
-# Dagelijkse cron (03:00 UTC) die de AVG-opschoning draait als die aanstaat.
+# Dagelijkse cron (03:00 UTC) voor AVG-opschoning/reindex/sync + v204: twee
+# ochtendtriggers (06:15 & 07:15 UTC, ma-vr) voor de "Waar werk je vandaag?"-push;
+# de code kiest de juiste o.b.v. Amsterdam-uur (zomer-/wintertijd).
 [triggers]
-crons = ["0 3 * * *"]
+crons = ["0 3 * * *", "15 6 * * 1-5", "15 7 * * 1-5"]
 
 # D1 = de hoofddatabase (vervangt Airtable). Schema in migratie/schema.sql.
 [[d1_databases]]
@@ -97,7 +99,7 @@ AVG_CLEANUP_ENABLED = "false"
 RETENTIE_DAGEN = "90"
 PORTAL_BASE_URL = "https://fresh-forward-intranet-test.peterjan-vaningen.workers.dev"
 RESEND_FROM = "Fresh Forward <portaal@fresh-forward.nl>"
-VAPID_PUBLIC_KEY = "BInbwHoTbWbvKwnfrKEzCdu8H_9F_WOv3CxUnnJgzCGZOSs7ik2Z0JZXUaY7DkQXIkFuvfEV_bcPVhQl2031lrA"
+VAPID_PUBLIC_KEY = "BOy1wcFQtpwYi_E1MRh1ox7c3Zw7Q_kqsUYCpppE7EjUBWUrlYxN0iJ0w3EFYeaUc2Ko7hk5TnmdmyZo3XCyLuc"
 VAPID_SUBJECT = "mailto:peterjan.vaningen@fresh-forward.nl"
 # Test-Worker staat NIET achter Cloudflare Access. DEV_MODE geeft je een vaste
 # beheerder-identiteit zodat je meteen kunt proefdraaien. ZET HIER GEEN ECHTE DATA NEER.

@@ -52,6 +52,34 @@ export async function updateEvent(
     .bind(e.title, e.description || null, e.location || null, e.category, e.start_at, e.end_at, e.all_day ? 1 : 0, id)
     .run();
 }
+// RSVP (v205): "Ben je erbij?" per event — idempotent per (event, email).
+export interface RsvpStand { ja: number; nee: number; namenJa: string[]; mijn: 1 | 0 | null }
+
+export async function zetRsvp(env: Env, eventId: string, email: string, naam: string, gaat: boolean): Promise<void> {
+  await db(env)
+    .prepare(
+      `INSERT INTO event_rsvp (tenant_id, event_id, email, naam, gaat, updated_at) VALUES ('default', ?, ?, ?, ?, ?)
+       ON CONFLICT(tenant_id, event_id, email) DO UPDATE SET gaat=excluded.gaat, naam=excluded.naam, updated_at=excluded.updated_at`,
+    )
+    .bind(eventId, email.toLowerCase(), naam, gaat ? 1 : 0, Date.now())
+    .run();
+}
+
+export async function rsvpStand(env: Env, eventId: string, email?: string | null): Promise<RsvpStand> {
+  const r = await db(env)
+    .prepare("SELECT email, naam, gaat FROM event_rsvp WHERE tenant_id='default' AND event_id=? ORDER BY updated_at")
+    .bind(eventId)
+    .all<{ email: string; naam: string | null; gaat: number }>();
+  const rows = r.results ?? [];
+  const mijnRow = email ? rows.find((x) => x.email === email.toLowerCase()) : undefined;
+  return {
+    ja: rows.filter((x) => x.gaat === 1).length,
+    nee: rows.filter((x) => x.gaat === 0).length,
+    namenJa: rows.filter((x) => x.gaat === 1).map((x) => (x.naam || x.email).trim().split(/\s+/)[0]),
+    mijn: mijnRow ? (mijnRow.gaat === 1 ? 1 : 0) : null,
+  };
+}
+
 // Soft delete (Stroom-plan 1.4) + herstel voor "Ongedaan maken".
 export async function deleteEvent(env: Env, id: string): Promise<void> {
   await db(env).prepare("UPDATE agenda_events SET deleted_at=? WHERE id=?").bind(Date.now(), id).run();

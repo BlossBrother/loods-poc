@@ -77,13 +77,24 @@ export function amsterdamHour(): number {
   return Number(new Intl.DateTimeFormat("nl-NL", { timeZone: "Europe/Amsterdam", hour: "2-digit", hour12: false }).format(new Date()));
 }
 
-export function pickGreeting(cfg: HeaderConfig, variants: GreetingVariant[], hour: number): string {
+// v195: stabiele FNV-1a-hash voor een deterministische "willekeurige" keuze.
+function fnv1a(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return h >>> 0;
+}
+
+// v195: optionele seed — zelfde seed = zelfde begroeting. Home geeft
+// "email|datum|dagdeel" mee zodat de groet niet bij elke render her-randomiseert
+// (review 12/6 bevinding 1); zonder seed blijft het gedrag als vanouds (preview beheer).
+export function pickGreeting(cfg: HeaderConfig, variants: GreetingVariant[], hour: number, seed?: string): string {
   const slot = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
   const pool = variants.filter((v) => v.active && (cfg.useTimeBased ? v.slot === slot || v.slot === "any" : v.slot === "any"));
   if (!pool.length) return cfg.fallbackGreeting || "Hallo";
   if (!cfg.randomize) return pool[0].text;
   const total = pool.reduce((a, v) => a + Math.max(1, v.weight || 1), 0);
-  let r = Math.random() * total;
+  const frac = seed != null ? (fnv1a(seed) % 100000) / 100000 : Math.random();
+  let r = frac * total;
   for (const v of pool) { r -= Math.max(1, v.weight || 1); if (r <= 0) return v.text; }
   return pool[pool.length - 1].text;
 }

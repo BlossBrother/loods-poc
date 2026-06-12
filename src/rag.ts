@@ -115,7 +115,9 @@ export async function syncIntranetContent(env: Env): Promise<void> {
     for (const x of r.results ?? []) await ins("kbnws_" + x.id, "nieuws", String(x.titel || "Nieuws"), String(x.inhoud || ""), "/#nieuws-" + x.id);
   } catch { /* geen nieuws-tabel? skip */ }
   try {
-    const r = await db(env).prepare("SELECT id, title, description, location, start_at FROM agenda_events ORDER BY start_at DESC LIMIT 100").all<any>();
+    // v203: verwijderde (soft-deleted) events NIET her-indexeren — anders kwam een
+    // verwijderd agendapunt bij de eerstvolgende reindex terug in de assistent.
+    const r = await db(env).prepare("SELECT id, title, description, location, start_at FROM agenda_events WHERE deleted_at IS NULL ORDER BY start_at DESC LIMIT 100").all<any>();
     const fmt = (v: unknown) => { const n = typeof v === "number" ? v : Date.parse(String(v)); return Number.isNaN(n) ? "" : new Intl.DateTimeFormat("nl-NL", { timeZone: "Europe/Amsterdam", dateStyle: "full", timeStyle: "short" }).format(new Date(n)); };
     for (const x of r.results ?? []) {
       const body = [x.description, "Wanneer: " + fmt(x.start_at), x.location ? "Locatie: " + x.location : ""].filter(Boolean).join(". ");
@@ -134,15 +136,65 @@ export async function reindexAll(env: Env): Promise<number> {
   return total;
 }
 
+export interface AskResult { answer: string; sources: { title: string; url?: string; category?: string }[]; answered: boolean; }
+
+// v203: kennisbank-doc volledig verwijderen (vectoren + chunks + doc). Gebruikt
+// bij Kennisdump-verwijderen en bij cascade-opruimen (bv. verwijderd agenda-event
+// "kbev_<id>" dat anders in de assistent bleef opduiken — melding PJ 12/6).
 export async function removeDoc(env: Env, docId: string): Promise<void> {
-  if (!env.DB) return;
-  const old = await db(env).prepare("SELECT id FROM kb_chunks WHERE doc_id = ?").bind(docId).all<{ id: string }>();
-  const ids = (old.results ?? []).map((r) => r.id);
-  if (ids.length && env.VECTORIZE) await env.VECTORIZE.deleteByIds(ids);
-  await db(env).prepare("DELETE FROM kb_chunks WHERE doc_id = ?").bind(docId).run();
+  try {
+    const old = await db(env).prepare("SELECT id FROM kb_chunks WHERE doc_id=?").bind(docId).all<{ id: string }>();
+    const ids = (old.results ?? []).map((r) => r.id);
+    if (ids.length && env.VECTORIZE) await env.VECTORIZE.deleteByIds(ids);
+    await db(env).prepare("DELETE FROM kb_chunks WHERE doc_id=?").bind(docId).run();
+  } catch { /* best effort */ }
+  await db(env).prepare("DELETE FROM kb_docs WHERE id=?").bind(docId).run().catch(() => {});
 }
 
-export interface AskResult { answer: string; sources: { title: string; url?: string; category?: string }[]; answered: boolean; }
+// v206: live webzoek (Tavily) — stap 3 in de assistent-keten, vóór de kale
+// algemene kennis. Levert een NL-samenvatting via het eigen LLM + bronlinks.
+// Zonder TAVILY_API_KEY (secret) geeft dit null en valt de keten gewoon terug.
+export async function webZoek(env: Env, vraag: string): Promise<{ answer: string; sources: { title: string; url?: string }[] } | null> {
+  if (!env.TAVILY_API_KEY || !env.AI) return null;
+  try {
+    const res = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.TAVILY_API_KEY}` },
+      body: JSON.stringify({ query: vraag, search_depth: "basic", max_results: 5, include_answer: false }),
+    });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { results?: { title: string; url: string; content: string }[] };
+    const hits = (j.results ?? []).filter((h) => h && h.title && h.content).slice(0, 5);
+    if (!hits.length) return null;
+    const ctx = hits.map((h, i) => `[${i + 1}] ${h.title}\n${h.content}`).join("\n\n").slice(0, 6000);
+    const r = await env.AI.run(GEN_MODEL, {
+      messages: [
+        { role: "system", content: "Beantwoord de vraag kort en feitelijk in het Nederlands (max ±120 woorden), uitsluitend op basis van de meegegeven webfragmenten. Staat het antwoord er niet in, zeg dat dan. Geen bronnummers in de lopende tekst." },
+        { role: "user", content: `Webfragmenten:\n${ctx}\n\nVraag: ${vraag}` },
+      ],
+    });
+    const answer = String((r as { response?: string }).response ?? "").trim();
+    if (!answer) return null;
+    return { answer, sources: hits.map((h) => ({ title: h.title.slice(0, 80), url: h.url })) };
+  } catch {
+    return null; // webzoek is een verrijking, nooit een breekpunt
+  }
+}
+
+// v200: algemene-kennis-antwoord voor de assistent — alléén als de kennisbank niets
+// weet én de invoer een echte vraag is (PJ 12/6: "hoeveel kassen staan er in
+// Nederland?" moet ook antwoord krijgen). Het antwoord wordt in de UI gelabeld als
+// algemene kennis, zodat niemand het voor intern beleid aanziet.
+export async function algemeenAntwoord(env: Env, vraag: string): Promise<string> {
+  if (!env.AI) return "AI is hier nog niet geactiveerd.";
+  const res = await env.AI.run(GEN_MODEL, {
+    messages: [
+      { role: "system", content: "Je bent de assistent van het Fresh Forward-intranet (Nederlandse kwekerij/agro-sector). Beantwoord de vraag kort en feitelijk in het Nederlands (max ±120 woorden). Weet je iets niet zeker, zeg dat eerlijk. Verzin nooit interne bedrijfsinformatie; je antwoordt uit algemene kennis." },
+      { role: "user", content: vraag },
+    ],
+  });
+  return String((res as { response?: string }).response ?? "").trim() || "Daar heb ik zo geen antwoord op.";
+}
 
 export async function ask(env: Env, question: string, opts: { audiences?: string[]; lang?: string } = {}): Promise<AskResult> {
   if (!ragActief(env)) {

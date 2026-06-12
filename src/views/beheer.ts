@@ -56,6 +56,8 @@ const BEHEER_GROEPEN: BeheerGroep[] = [
     { href: "/beheer/afdelingen", label: "Afdelingen", desc: "De keuzelijst voor afdelingen", icon: "tag" },
     { href: "/beheer/trainingen", label: "Trainingen", desc: "Cursussen en hoofdstukken", icon: "book" },
     { href: "/beheer/leesbevestiging", label: "Leesbevestiging", desc: "Wie heeft welk nieuws/beleid gelezen", icon: "doc" },
+    { href: "/beheer/kennisdump", label: "Kennisdump", desc: "Drop documenten — AI leest, categoriseert en indexeert ze", icon: "doc" },
+    { href: "/beheer/analytics", label: "Analytics", desc: "Gebruik per week/dag, assistent, prikbord — geaggregeerd", icon: "doc" },
   ] },
   { title: "Klantenportaal", tegels: [
     { href: "/beheer/klanten", label: "Klanten", desc: "Portaal-toegang & inloglinks", icon: "client" },
@@ -184,7 +186,7 @@ const NAV_ADMIN_JS = `(function(){
   refresh(); serialize();
 })();`;
 
-export function beheerModules(navLayout: NavLayout, shoutoutsHome = false, opts: { melding?: string } = {}) {
+export function beheerModules(navLayout: NavLayout, shoutoutsHome = false, opts: { melding?: string; leesKnop?: boolean } = {}) {
   const byGroup = (gid: string) => navLayout.modules.filter((m) => m.group === gid).sort((a, b) => a.order - b.order);
   const unit = (m: { key: string; label: string; enabled: boolean; icon: string }) => html`<div class="unit" draggable="true" data-key="${m.key}">
     <span class="uhandle umod" title="Versleep">${svg(m.icon)}</span>
@@ -216,6 +218,10 @@ export function beheerModules(navLayout: NavLayout, shoutoutsHome = false, opts:
       <label class="row" style="gap:11px; padding:12px 2px; margin-top:10px; border-top:1px solid var(--line)">
         <input type="checkbox" name="shoutouts_home" ${shoutoutsHome ? "checked" : ""} />
         <span style="flex:1;min-width:0">Recente shout-outs op de homepagina<span class="appdesc" style="display:block;font-weight:400">Toon de laatste shout-outs van het prikbord als blok op home.</span></span>
+      </label>
+      <label class="row" style="gap:11px; padding:12px 2px; border-top:1px solid var(--line)">
+        <input type="checkbox" name="lees_knop" ${opts.leesKnop ? "checked" : ""} />
+        <span style="flex:1;min-width:0">"Gelezen"-knop voor medewerkers<span class="appdesc" style="display:block;font-weight:400">Uit = stille registratie: het openen van nieuws/beleid telt als gezien. Beheer → Leesbevestiging toont altijd wie wat gezien (en evt. bevestigd) heeft.</span></span>
       </label>
       <input type="hidden" name="layout" id="ng-json" />
       <button type="submit" style="margin-top:14px">Opslaan</button>
@@ -250,9 +256,101 @@ export function beheerModules(navLayout: NavLayout, shoutoutsHome = false, opts:
   `;
 }
 
+// Analytics (v206): geaggregeerd beheerdashboard — KPI-kaarten + CSS-staafjes,
+// geen chart-library, geen individuele data.
+export interface AnalyticsView {
+  totaalActief: number; dagActief: number; weekActief: number;
+  vragen7d: number; vragenIntern7d: number; posts7d: number; polls7d: number;
+  statusVandaag: number; gezienTotaal: number; bevestigdTotaal: number;
+  perModule: { module: string; users: number }[];
+  perDag: { dag: string; label: string; n: number }[];
+}
+export function beheerAnalytics(a: AnalyticsView) {
+  const pct = (n: number, van: number) => (van > 0 ? Math.round((n / van) * 100) : 0);
+  const maxDag = Math.max(1, ...a.perDag.map((x) => x.n));
+  const maxMod = Math.max(1, ...a.perModule.map((x) => x.users));
+  const kpi = (titel: string, waarde: string, sub: string) => html`
+    <article class="card" style="flex:1 1 150px;min-width:150px">
+      <p class="muted" style="margin:0;font-size:.74rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase">${titel}</p>
+      <p style="margin:4px 0 0;font-size:1.7rem;font-weight:800;line-height:1.1">${waarde}</p>
+      <p class="muted" style="margin:2px 0 0;font-size:.8rem">${sub}</p>
+    </article>`;
+  return html`
+    ${pageTitle("doc", "Analytics")}
+    <p class="muted">Geaggregeerd en privacyvriendelijk — tellingen, geen individuele tracking.</p>
+    <div class="row wrap" style="gap:10px;align-items:stretch">
+      ${kpi("Actief deze week", `${a.weekActief}/${a.totaalActief}`, `${pct(a.weekActief, a.totaalActief)}% van de actieve collega's`)}
+      ${kpi("Actief vandaag", String(a.dagActief), `${pct(a.dagActief, a.totaalActief)}% van het team`)}
+      ${kpi("Assistent-vragen (7d)", String(a.vragen7d), `${a.vragen7d > 0 ? pct(a.vragenIntern7d, a.vragen7d) + "% intern beantwoord" : "nog geen vragen"}`)}
+      ${kpi("Ochtendvraag vandaag", `${a.statusVandaag}/${a.totaalActief}`, "heeft de dagstatus ingevuld")}
+      ${kpi("Prikbord (7d)", String(a.posts7d + a.polls7d), `${a.posts7d} post${a.posts7d === 1 ? "" : "s"} · ${a.polls7d} poll${a.polls7d === 1 ? "" : "s"}`)}
+      ${kpi("Leesregistraties", String(a.gezienTotaal + a.bevestigdTotaal), `${a.gezienTotaal} gezien · ${a.bevestigdTotaal} bevestigd`)}
+    </div>
+    ${eyebrow("Activiteit per dag (14 dagen — vragen + posts)")}
+    <article class="card">
+      <div style="display:flex;align-items:flex-end;gap:4px;height:110px">
+        ${a.perDag.map((x) => html`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0">
+          <div title="${x.dag}: ${x.n}" style="width:100%;max-width:26px;height:${Math.max(3, Math.round((x.n / maxDag) * 86))}px;border-radius:6px 6px 2px 2px;background:linear-gradient(180deg,#3fa468,#236b41);opacity:${x.n === 0 ? ".25" : "1"}"></div>
+          <span class="muted" style="font-size:.62rem;white-space:nowrap">${x.label}</span>
+        </div>`)}
+      </div>
+    </article>
+    ${eyebrow("Module-bereik (unieke gebruikers, 7 dagen)")}
+    ${a.perModule.length === 0
+      ? html`<article class="card"><p class="muted" style="margin:0">Nog geen module-data.</p></article>`
+      : html`<article class="card">
+          ${a.perModule.map((m) => html`<div class="row" style="gap:10px;margin:7px 0;align-items:center">
+            <span style="flex:0 0 92px;font-size:.84rem;font-weight:600;text-transform:capitalize">${m.module}</span>
+            <span style="flex:1;height:10px;border-radius:999px;background:var(--surface-2);overflow:hidden"><span style="display:block;height:100%;width:${Math.max(4, Math.round((m.users / maxMod) * 100))}%;border-radius:999px;background:linear-gradient(90deg,#3fa468,#236b41)"></span></span>
+            <span class="muted" style="flex:0 0 28px;text-align:right;font-size:.82rem;font-weight:700">${m.users}</span>
+          </div>`)}
+        </article>`}
+    <p class="muted"><a href="/beheer">&larr; beheer</a></p>
+  `;
+}
+
+// Kennisdump (v202): drop-zone + overzicht van AI-verwerkte documenten.
+export interface DumpRow { id: string; bestand: string; titel: string; categorie: string; samenvatting: string | null; audience: string; suggestie_klant: number; status: string }
+export function beheerKennisdump(items: DumpRow[], opts: { melding?: string } = {}) {
+  return html`
+    ${pageTitle("doc", "Kennisdump")}
+    ${opts.melding ? html`<p class="ok-melding">${opts.melding}</p>` : ""}
+    <form method="post" action="/beheer/kennisdump" enctype="multipart/form-data" class="card">
+      <h3 style="margin-top:0">Dump hier je documenten</h3>
+      <p class="muted" style="margin-top:4px">PDF, Word, tekst, foto's — de AI leest ze, bedenkt titel/categorie en
+        indexeert ze direct voor de assistent en het zoeken. Alles is eerst <strong>alleen intern</strong>;
+        zichtbaar voor klanten (portaal-vraagbaak) maak je het hieronder per document, met één knop.
+        Max 8 bestanden per keer, 15&nbsp;MB per stuk.</p>
+      <input type="file" name="bestand" multiple required accept=".pdf,.doc,.docx,.txt,.md,.csv,.html,.jpg,.jpeg,.png,.webp" style="display:block;margin:12px 0" />
+      <button class="btn" style="margin:0">Verwerken met AI</button>
+    </form>
+    ${eyebrow(`In de kennisbank · ${items.length}`)}
+    ${items.length === 0
+      ? html`<article class="card"><p class="muted" style="margin:0">Nog niets gedumpt — sleep hierboven je eerste bestanden erin.</p></article>`
+      : html`<article class="card listcard"><ul class="clean">
+          ${items.map((it) => html`<li style="padding:var(--sp-3) 0;border-bottom:1px solid var(--line)">
+            <div class="row wrap" style="gap:10px">
+              <span class="grow"><strong>${it.titel}</strong> <span class="chip">${it.categorie}</span>${it.audience === "public" ? html` <span class="chip" style="color:var(--green)">klant-zichtbaar</span>` : ""}
+                <br /><span class="muted" style="font-size:.82rem">${it.bestand} · ${it.status}${it.samenvatting ? html` — ${it.samenvatting}` : ""}</span></span>
+              <form method="post" action="/beheer/kennisdump/audience" style="margin:0;flex:none">
+                <input type="hidden" name="id" value="${it.id}" />
+                <input type="hidden" name="klant" value="${it.audience === "public" ? "0" : "1"}" />
+                <button class="btn btn-soft" style="margin:0;padding:6px 12px;font-size:.8rem">${it.audience === "public" ? "Klant-zichtbaar uitzetten" : it.suggestie_klant ? "Klant-zichtbaar maken ✦ AI-suggestie" : "Klant-zichtbaar maken"}</button>
+              </form>
+              <form method="post" action="/beheer/kennisdump/verwijder" style="margin:0;flex:none">
+                <input type="hidden" name="id" value="${it.id}" />
+                <button class="btn btn-soft" style="margin:0;padding:6px 12px;font-size:.8rem">Verwijder</button>
+              </form>
+            </div>
+          </li>`)}
+        </ul></article>`}
+    <p class="muted"><a href="/beheer">&larr; beheer</a></p>
+  `;
+}
+
 // Leesbevestiging-overzicht (v185): per nieuwsbericht/beleidsdocument hoeveel
 // collega's "Gelezen" hebben bevestigd + wie (uitklapbaar).
-export interface LeesItem { type: "nieuws" | "document"; titel: string; meta: string; aantal: number; namen: string[] }
+export interface LeesItem { type: "nieuws" | "document"; titel: string; meta: string; aantal: number; namen: string[]; gezien: number; gezienNamen: string[] }
 export function beheerLeesbevestiging(items: LeesItem[], totaal: number) {
   const lijst = (xs: LeesItem[]) =>
     xs.length === 0
@@ -262,11 +360,13 @@ export function beheerLeesbevestiging(items: LeesItem[], totaal: number) {
             (it) => html`<li>
               <div class="row wrap" style="gap:10px">
                 <span class="grow"><strong>${it.titel}</strong> <span class="muted">${it.meta}</span></span>
+                <span style="flex:none;font-size:.82rem;color:var(--muted)">${it.gezien} gezien</span>
                 <span style="flex:none;font-weight:700;color:${it.aantal >= totaal ? "var(--ok-tx)" : "var(--muted)"}">${it.aantal}/${totaal}</span>
               </div>
-              ${it.aantal > 0
+              ${it.aantal > 0 || it.gezien > 0
                 ? html`<details style="margin-top:4px"><summary class="muted" style="cursor:pointer;font-size:.8rem">Wie</summary>
-                    <p class="muted" style="margin:4px 0 0;font-size:.82rem">${it.namen.join(", ")}</p>
+                    ${it.aantal > 0 ? html`<p class="muted" style="margin:4px 0 0;font-size:.82rem"><strong>Bevestigd:</strong> ${it.namen.join(", ")}</p>` : ""}
+                    ${it.gezien > 0 ? html`<p class="muted" style="margin:4px 0 0;font-size:.82rem"><strong>Gezien:</strong> ${it.gezienNamen.join(", ")}</p>` : ""}
                   </details>`
                 : ""}
             </li>`,
@@ -274,8 +374,10 @@ export function beheerLeesbevestiging(items: LeesItem[], totaal: number) {
         </ul></article>`;
   return html`
     ${pageTitle("news", "Leesbevestiging")}
-    <p class="muted">Aantal collega's dat per item "Gelezen" heeft bevestigd, van de ${totaal} actieve
-      medewerkers. De knop staat op nieuwsberichten en op documenten in de categorie <strong>Beleid</strong>.</p>
+    <p class="muted">Per item: hoeveel collega's het <strong>gezien</strong> hebben (pagina geopend,
+      stille registratie sinds v194) en hoeveel er expliciet "Gelezen" bevestigden (x/${totaal} actieve
+      medewerkers). De "Gelezen"-knop staat aan/uit via Beheer → Menu-indeling; geldt voor
+      nieuwsberichten en documenten in de categorie <strong>Beleid</strong>.</p>
     ${eyebrow("Nieuws")}
     ${lijst(items.filter((i) => i.type === "nieuws"))}
     ${eyebrow("Beleid (documenten)")}

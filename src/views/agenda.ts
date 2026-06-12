@@ -32,7 +32,7 @@ function catChip(key: string, label: string) {
   return html`<span class="pill"><span class="catdot" style="background:${catColor(key)}"></span>${label}</span>`;
 }
 
-function header(view: string, anchor: string, prev: string, next: string, today: string, title: string, canEdit: boolean) {
+function header(view: string, anchor: string, prev: string, next: string, today: string, title: string, _canEdit: boolean) {
   const pill = (v: string, lbl: string) => html`<a class="pill ${v === view ? "on" : ""}" href="/agenda?view=${v}&date=${anchor}">${lbl}</a>`;
   return html`
     <div class="toolbar">
@@ -40,7 +40,7 @@ function header(view: string, anchor: string, prev: string, next: string, today:
       <a class="btn btn-soft" style="margin:0;padding:9px 15px" href="/agenda?view=${view}&date=${today}">Vandaag</a>
       ${navBtn(`/agenda?view=${view}&date=${next}`, "r", "Volgende")}
       <strong>${title}</strong>
-      ${canEdit ? html`<button type="button" class="btn" style="margin:0 0 0 auto;padding:9px 15px" data-sheet="ff-agenda-new">+ Event</button>` : ""}
+      ${/* v195 (review #5a): "+ Event"-knop verwijderd — de FAB doet dezelfde actie (consistent met prikbord/meldingen). */ ""}
     </div>
     <div class="pills">${pill("maand", "Maand")} ${pill("week", "Week")} ${pill("dag", "Dag")} <a class="pill" href="/agenda?view=verlof">Verlof</a></div>`;
 }
@@ -144,7 +144,7 @@ export function agendaPage(
   `);
 }
 
-export function eventDetail(e: AgendaEvent, canEdit: boolean) {
+export function eventDetail(e: AgendaEvent, canEdit: boolean, rsvp?: { ja: number; nee: number; namenJa: string[]; mijn: 1 | 0 | null } | null) {
   const tijd = e.all_day ? "Hele dag" : `${amsTime(e.start_at)}–${amsTime(e.end_at)}`;
   const dag = nlDate(amsDay(e.start_at), { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const cat = CATS[e.category];
@@ -157,6 +157,18 @@ export function eventDetail(e: AgendaEvent, canEdit: boolean) {
       ${e.location ? html`<div class="titem"><time>&nbsp;</time><span class="tx"><h4>${e.location}</h4><p>Locatie</p></span></div>` : ""}
       ${e.description ? html`<div style="white-space:pre-wrap;line-height:1.55;margin-top:var(--sp-2)">${e.description}</div>` : html`<p class="muted">Geen verdere omschrijving.</p>`}
     </article>
+    ${rsvp
+      ? html`<article class="card" style="margin-top:var(--sp-3)">
+          <h3 style="margin:0 0 6px">Ben je erbij?</h3>
+          ${rsvp.ja > 0
+            ? html`<p class="muted" style="margin:0 0 10px;font-size:.88rem">${rsvp.ja} collega${rsvp.ja === 1 ? "" : "'s"} ${rsvp.ja === 1 ? "komt" : "komen"}${rsvp.namenJa.length ? html` — ${rsvp.namenJa.slice(0, 8).join(", ")}${rsvp.namenJa.length > 8 ? ` +${rsvp.namenJa.length - 8}` : ""}` : ""}</p>`
+            : html`<p class="muted" style="margin:0 0 10px;font-size:.88rem">Nog geen aanmeldingen — wees de eerste!</p>`}
+          <form method="post" action="/agenda/event/${e.id}/rsvp" class="row" style="gap:8px;margin:0" data-no-queue>
+            <button name="gaat" value="ja" class="btn" style="margin:0">${rsvp.mijn === 1 ? "✓ Ik kom" : "Ja, ik kom"}</button>
+            <button name="gaat" value="nee" class="btn btn-soft" style="margin:0">${rsvp.mijn === 0 ? "✓ Niet erbij" : "Nee"}</button>
+          </form>
+        </article>`
+      : ""}
     ${canEdit ? html`<a class="ghost" href="/agenda?view=dag&date=${amsDay(e.start_at)}&edit=${e.id}">Bewerken</a>` : ""}
   `);
 }

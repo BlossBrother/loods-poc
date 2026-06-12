@@ -20,16 +20,27 @@ const MODULE_LABEL: Record<string, string> = { agenda: "Agenda", nieuws: "Nieuws
 export function notificatiesPage(rijen: NotifRij[], prefs: Record<string, boolean>, unread: number) {
   return lds(html`
     ${pageTitle("bell", "Notificaties")}
-    ${unread > 0
-      ? html`<form method="post" action="/notificaties/gelezen" style="margin:0 0 12px" data-no-queue>
-          <input type="hidden" name="alles" value="1" />
-          <button class="btn-soft btn" style="margin:0;padding:8px 14px;font-size:.85rem">Alles als gelezen markeren (${unread})</button>
-        </form>`
+    ${unread > 0 || rijen.length > 0
+      ? html`<div class="row" style="gap:8px;margin:0 0 12px;flex-wrap:wrap">
+          ${unread > 0
+            ? html`<form method="post" action="/notificaties/gelezen" style="margin:0" data-no-queue>
+                <input type="hidden" name="alles" value="1" />
+                <button class="btn-soft btn" style="margin:0;padding:8px 14px;font-size:.85rem">Alles als gelezen markeren (${unread})</button>
+              </form>`
+            : ""}
+          ${rijen.length > 0
+            ? html`<form method="post" action="/notificaties/verwijder" style="margin:0" data-no-queue>
+                <input type="hidden" name="id" value="alles" />
+                <button class="btn-soft btn" style="margin:0;padding:8px 14px;font-size:.85rem">Alles wissen</button>
+              </form>`
+            : ""}
+        </div>`
       : ""}
     ${rijen.length === 0
       ? emptyState({ icon: "alert", title: "Nog geen notificaties", text: "Nieuwe events, nieuws en meldingen verschijnen hier." })
       : html`<article class="card listcard"><ul class="clean">${rijen.map((r) => html`<li style="padding:0">
-          <a href="/notificaties/open/${r.id}" style="display:block;text-decoration:none;color:inherit;padding:12px 2px;${r.read_at ? "opacity:.72" : ""}">
+          <div class="row" style="gap:4px;align-items:stretch">
+          <a href="/notificaties/open/${r.id}" style="display:block;flex:1;min-width:0;text-decoration:none;color:inherit;padding:12px 2px;${r.read_at ? "opacity:.72" : ""}">
             <span style="display:flex;align-items:center;gap:8px">
               ${r.read_at ? "" : html`<span style="width:8px;height:8px;border-radius:50%;background:var(--t-ink);flex:none"></span>`}
               <strong style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.titel}</strong>
@@ -38,6 +49,12 @@ export function notificatiesPage(rijen: NotifRij[], prefs: Record<string, boolea
             ${r.body ? html`<span class="muted" style="display:block;margin-top:2px;font-size:.86rem">${r.body}</span>` : ""}
             <span class="muted" style="display:block;margin-top:2px;font-size:.76rem">${relTijd(r.created_at)}</span>
           </a>
+          ${/* v203: notificatie zelf wissen — verwijderde bron of gewoon opruimen */ ""}
+          <form method="post" action="/notificaties/verwijder" style="margin:0;display:flex;align-items:center" data-no-queue>
+            <input type="hidden" name="id" value="${r.id}" />
+            <button class="btn-soft btn" aria-label="Notificatie wissen" title="Wissen" style="margin:0;padding:6px 10px;font-size:.8rem">&#10005;</button>
+          </form>
+          </div>
         </li>`)}</ul></article>`}
 
     ${eyebrow("Voorkeuren")}

@@ -170,5 +170,7 @@ export async function sendPush(
   };
   if (auth) headers.Authorization = auth;
   const res = await fetch(sub.endpoint, { method: "POST", headers, body: body as BodyInit });
-  return { status: res.status, gone: res.status === 404 || res.status === 410 };
+  // v190: 403 telt ook als "weg" — dat geeft de push-dienst bij een abonnement dat
+  // onder een oud VAPID-sleutelpaar is aangemaakt (sleutelrotatie 11 juni 2026).
+  return { status: res.status, gone: res.status === 404 || res.status === 410 || res.status === 403 };
 }

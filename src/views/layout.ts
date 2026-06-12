@@ -2,6 +2,7 @@ import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import { BUILD } from "../pwa";
 import { LOODS_CSS } from "./loods";
+import { HOME_SHELL_CSS } from "./home2"; // v198: home-in-de-shell (gescoped .hm)
 
 type Body = HtmlEscapedString | Promise<HtmlEscapedString>;
 
@@ -237,18 +238,30 @@ function subTabs(active: string, roles: string[]) {
 // Bottom-nav (Set 4 #3): kern-bestemmingen vast in de duim-zone (Home + de eerste paar
 // ingeschakelde modules) + "Meer" (opent de volledige drawer). Actieve is gemarkeerd.
 function bottomNav(active: string, roles: string[]) {
-  void roles;
-  // Capsule-tabbar (ronde 3): vaste bestemmingen, identiek aan de home-tabbar
-  // (designsysteem §3.13). "Meer" zit in de header (label for=navtoggle, .hmore).
-  // Een per tenant uitgezette module redirect via de bestaande URL-guard naar home.
+  // v196 (reviewfeature 6): de capsule volgt de module-config — Home + de eerste
+  // drie INGESCHAKELDE modules in beheer-volgorde (nav-token, zelfde bron als
+  // zijbalk/ballon) + Meer. Client-side is cosmetisch; de bestaande URL-guard
+  // en module-middleware blijven de server-side waarheid (uit = redirect/403).
   const head = headModuleForPath(active);
+  const navTok = roles.find((r) => r.indexOf("nav:") === 0);
+  let order: string[] = [];
+  if (navTok) {
+    try {
+      const p = JSON.parse(navTok.slice(4)) as { m?: [string, string, number][] };
+      order = (p.m ?? []).filter((x) => !!x[2]).map((x) => x[0]);
+    } catch { /* val terug op mod:-tokens */ }
+  }
+  if (!order.length) order = roles.filter((r) => r.indexOf("mod:") === 0).map((r) => r.slice(4));
+  // Vertrouwde tab-iconen voor de klassieke drie; overige modules = zijbalk-icoon.
+  const TB_ICON: Record<string, string> = { agenda: "tbcal", prikbord: "tbmsg", meldingen: "tbbell" };
   type Dest = { href: string; label: string; icon: string; on: boolean };
-  const dests: Dest[] = [
-    { href: "/", label: "Home", icon: "tbhome", on: active === "/" },
-    { href: "/agenda", label: "Agenda", icon: "tbcal", on: head === "agenda" },
-    { href: "/social", label: "Prikbord", icon: "tbmsg", on: head === "prikbord" },
-    { href: "/meldingen", label: "Meldingen", icon: "tbbell", on: head === "meldingen" },
-  ];
+  const dests: Dest[] = [{ href: "/", label: "Home", icon: "tbhome", on: active === "/" }];
+  for (const key of order) {
+    if (dests.length >= 4) break; // Home + 3 modules; Meer komt er vast achteraan
+    const it = moduleNavItems(key).filter((i) => mayShowRole(i, roles))[0];
+    if (!it) continue;
+    dests.push({ href: it.href, label: it.label, icon: TB_ICON[key] ?? it.icon, on: head === key });
+  }
   return html`<nav class="botnav" aria-label="Hoofdnavigatie">
     <div class="botnav-inner">
       <span class="botnav-blob" aria-hidden="true"></span>
@@ -329,6 +342,8 @@ export function layout(title: string, active: string, body: Body, roles: string[
         /* Motion (Set 1): micro-feedback / standaard / schermovergang + easing. */
         --dur-fast:140ms; --dur-base:240ms; --dur-screen:300ms;
         --ease-out:cubic-bezier(.2,.7,.3,1); --ease-in:cubic-bezier(.4,0,1,1); --ease-standard:cubic-bezier(.4,0,.2,1);
+        /* v191 (HONK §9.1): aliassen op de bestaande motion-laag — zelfde waarden, HONK-namen. */
+        --dur-press:var(--dur-fast); --dur-enter:420ms; --stagger:40ms; --ease-spring:var(--ease-out);
         /* Typografie-schaal (Set 3). */
         --fs-caption:clamp(.78rem, .76rem + .08vw, .82rem); --fs-sm:clamp(.86rem, .83rem + .12vw, .92rem); --fs-body:clamp(1rem, .96rem + .2vw, 1.06rem); --fs-h3:clamp(1.08rem, 1rem + .35vw, 1.18rem); --fs-h2:clamp(1.2rem, 1.05rem + .65vw, 1.4rem); --fs-h1:clamp(1.62rem, 1.35rem + 1.2vw, 2rem);
         --lh-tight:1.25; --lh-body:1.65;
@@ -424,6 +439,10 @@ export function layout(title: string, active: string, body: Body, roles: string[
       *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
       img{ -webkit-user-drag:none; }
       a, button, .botnav-item, .navitem, .subtab, .pill, .emojibtn{ touch-action:manipulation; }
+      /* v191 (HONK C2): UI-chroom niet selecteerbaar/geen long-press-menu — content (posts,
+         meldingen, besteldetails) blijft WEL selecteerbaar; inputs expliciet selecteerbaar. */
+      header.app, .botnav, .fab, .pill, .subtab, .navitem, .skeleton{ -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+      input, textarea, [contenteditable]{ -webkit-user-select:text; user-select:text; }
       [hidden]{ display:none !important; }
       /* Lijst-item glijdt weg bij verwijderen (undo-snackbar), en weer terug bij ongedaan maken. */
       .ff-leaving{ opacity:0; transform:translateX(-26px); transition:opacity var(--dur-base) var(--ease-in), transform var(--dur-base) var(--ease-in); }
@@ -486,6 +505,44 @@ export function layout(title: string, active: string, body: Body, roles: string[
       /* Sync-status (Stroom-plan 1.3): subtiel mini-icoon in de header zolang er
          onbevestigde mutaties openstaan (html.ff-syncing via ffMutate). Geen tekst.
          Onder prefers-reduced-motion staat animatie globaal uit -> statisch icoontje. */
+      /* v200: AI-assistent-knop linksboven (sparkle) — opent de assistent-sheet. */
+      header.app .hai{ display:inline-flex; align-items:center; justify-content:center; min-width:44px; min-height:44px;
+        margin:0; padding:0; background:none; border:0; cursor:pointer; color:var(--green); position:relative; z-index:1; }
+      header.app .hai svg{ width:22px; height:22px; }
+      header.app .hai:active{ transform:scale(.92); }
+      /* Assistent-sheet: schuift over elke pagina heen; gesprek blijft staan bij navigeren. */
+      .ai-scrim{ position:fixed; inset:0; z-index:calc(var(--z-overlay) + 4); background:rgba(0,0,0,.38); opacity:0; pointer-events:none; transition:opacity var(--dur-fast) var(--ease-in); }
+      .ai-scrim.show{ opacity:1; pointer-events:auto; }
+      .ai-sheet{ position:fixed; left:12px; right:12px; bottom:calc(env(safe-area-inset-bottom) + 12px);
+        margin:0 auto; max-width:560px; z-index:calc(var(--z-overlay) + 5); background:var(--card-hi, var(--surface));
+        border:1px solid var(--line); border-radius:22px; box-shadow:var(--elev-3); overflow:hidden;
+        transform:translateY(calc(100% + 24px)); transition:transform var(--dur-screen) var(--ease-out); }
+      .ai-sheet.open{ transform:none; }
+      .ai-head{ display:flex; align-items:center; gap:9px; padding:13px 16px 11px; border-bottom:1px solid var(--line); }
+      .ai-head svg{ width:18px; height:18px; color:var(--green); flex:none; }
+      .ai-head strong{ flex:1; font-size:.95rem; }
+      .ai-x{ background:none; border:0; color:var(--muted); font-size:1rem; cursor:pointer; padding:6px 8px; margin:-6px -8px -6px 0; }
+      .ai-body{ max-height:46vh; min-height:120px; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:10px; overscroll-behavior:contain; }
+      .ai-hint{ color:var(--muted); font-size:.85rem; margin:0; }
+      .ai-msg{ max-width:88%; border-radius:16px; padding:10px 13px; font-size:.92rem; line-height:1.5; overflow-wrap:anywhere; }
+      .ai-msg.me{ align-self:flex-end; background:linear-gradient(135deg,#3fa468,#236b41); color:#fff; border-bottom-right-radius:6px; }
+      .ai-msg.bot{ align-self:flex-start; background:var(--surface-2, var(--surface)); border:1px solid var(--line); border-bottom-left-radius:6px; }
+      .ai-tag{ display:block; font-size:.68rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:5px; }
+      .ai-src{ display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; }
+      .ai-src a, .ai-src span{ font-size:.74rem; font-weight:600; color:var(--green); border:1px solid var(--line); border-radius:999px; padding:3px 10px; text-decoration:none; }
+      .ai-dots{ display:inline-flex; gap:4px; align-items:center; }
+      .ai-dots i{ width:6px; height:6px; border-radius:50%; background:var(--muted); animation:aidot 1s ease-in-out infinite; }
+      .ai-dots i:nth-child(2){ animation-delay:.15s } .ai-dots i:nth-child(3){ animation-delay:.3s }
+      @keyframes aidot{ 0%,100%{ opacity:.3; transform:translateY(0) } 50%{ opacity:1; transform:translateY(-3px) } }
+      .ai-form{ display:flex; gap:8px; padding:10px 12px calc(10px + 2px); border-top:1px solid var(--line); }
+      /* v201: font-size 16px — onder de 16px zoomt iOS de hele pagina in bij focus
+         (PJ's "toetsenbordzoom op de AI-laag"); 16px voorkomt die auto-zoom. */
+      .ai-form input{ flex:1; min-width:0; border:1px solid var(--line); background:var(--surface); color:var(--ink);
+        border-radius:999px; padding:10px 16px; font:inherit; font-size:16px; }
+      .ai-form input:focus-visible{ outline:2px solid var(--accent); outline-offset:1px; }
+      .ai-send{ flex:none; width:42px; height:42px; border-radius:50%; border:0; cursor:pointer; color:#fff;
+        background:linear-gradient(135deg,#3fa468,#236b41); display:grid; place-items:center; font-size:1.05rem; font-weight:700; }
+      .ai-send:active{ transform:scale(.92); }
       header.app .hsync{ display:none; align-items:center; justify-content:center; color:var(--muted); flex:0 0 auto;
         position:absolute; z-index:1; right:54px; top:calc(env(safe-area-inset-top) + var(--head-h)/2); transform:translateY(-50%); }
       header.app .hsync svg{ width:16px; height:16px; animation:ptrspin .9s linear infinite; }
@@ -558,7 +615,7 @@ export function layout(title: string, active: string, body: Body, roles: string[
           border:1px solid var(--line); border-radius:18px; box-shadow:var(--elev-3); padding:0;
           transform-origin:bottom right; transform:translateY(16px) scale(.68); opacity:0; pointer-events:none;
           transition:transform var(--dur-fast) var(--ease-in), opacity var(--dur-fast) var(--ease-in); }
-        aside.side nav{ flex:1 1 auto; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:8px; }
+        aside.side nav{ flex:1 1 auto; min-height:0; overflow-y:auto; padding:8px; }
         /* Home-stijl menu (v177/v179): geen kopbalk; sluiten via scrim/Escape — zoals op home. */
         /* v182/v183: rijhoogte en ritme exact het home-menu — metriek expliciet in px
            gepind (rij 20px, titel 14px, footer 16px), zodat font-'normal' nooit afwijkt. */
@@ -700,6 +757,9 @@ export function layout(title: string, active: string, body: Body, roles: string[
       /* Tijdens een paginaovergang (navigatie) speelt alleen de view-transition; geen dubbele
          kaart-entrance -> voorkomt de "stotter" bij het openen van schermen (OPDRACHT 6). */
       html.vt-nav main .card{ animation:none; }
+      /* Stille SWR-revalidate (v198): géén herhaalde entree-animaties bij de tweede,
+         onzichtbare DOM-swap — dat was de "stotter" na elke navigatie. */
+      main.ff-noanim > *, main.ff-noanim .card{ animation:none !important; }
       main > *{ animation:fadeUp var(--dur-screen) both; }
       main > *:nth-child(2){ animation-delay:.04s; }
       main > *:nth-child(3){ animation-delay:.08s; }
@@ -749,8 +809,10 @@ export function layout(title: string, active: string, body: Body, roles: string[
       /* Mobiele bottom-bar (duim-zone): head-modules via de drawer, submodules + primaire actie hier. */
       .botnav, .fab{ display:none; }
       /* Profiel-avatar rechtsboven (duim-UI v175): initialen of teamfoto, linkt naar Mijn account. */
+      /* v204: margin-left AUTO — sinds het vergrootglas weg is (v202) duwt niets de
+         avatar meer naar rechts; deze latere regel won met 10px van de v202-fix. */
       header.app .hava{ display:inline-flex; align-items:center; justify-content:center; flex:none; position:relative; z-index:1;
-        width:36px; height:36px; border-radius:50%; overflow:hidden; margin-left:10px; text-decoration:none;
+        width:36px; height:36px; border-radius:50%; overflow:hidden; margin-left:auto; text-decoration:none;
         background:linear-gradient(135deg,#3fa468,#236b41); color:#fff; font-weight:800; font-size:.74rem; letter-spacing:.02em;
         border:1px solid color-mix(in srgb, var(--line) 55%, transparent); box-shadow:inset 0 1px 0 rgb(255 255 255 / .07); }
       header.app .hava img{ width:100%; height:100%; object-fit:cover; display:block; }
@@ -769,7 +831,7 @@ export function layout(title: string, active: string, body: Body, roles: string[
            ongeacht hoe iOS de fixed body-box berekent. Lost de zwarte home-indicator-strook op. */
         body::after{ content:""; position:fixed; left:0; right:0; top:-80px; bottom:-80px;
           background:var(--bg); z-index:-1; pointer-events:none; }
-        .shell{ position:absolute; inset:0; overflow-y:auto; -webkit-overflow-scrolling:touch;
+        .shell{ position:absolute; inset:0; overflow-y:auto;
           padding-top:calc(env(safe-area-inset-top) + var(--head-h)); }
         footer{ display:none; }
         /* Zwevende pill-tabbar (v139, premium shell): los van de onderrand (~12px boven de
@@ -819,14 +881,15 @@ export function layout(title: string, active: string, body: Body, roles: string[
         .botnav-item .tbadge{ position:absolute; top:4px; left:calc(50% + 6px); min-width:17px; height:17px; border-radius:9px;
           background:linear-gradient(135deg,#3fa468,#236b41); color:#fff; font-size:10px; font-weight:800;
           display:grid; place-items:center; padding:0 4px; border:2px solid var(--cap-ring); }
-        .fab{ display:inline-flex; align-items:center; justify-content:center; position:fixed; right:16px; z-index:calc(var(--z-nav) + 1);
+        .fab{ display:inline-flex; align-items:center; justify-content:center; position:fixed; right:16px; z-index:calc(var(--z-nav) + 1); view-transition-name:ff-fab;
           bottom:calc(var(--pill-gap) + 84px); width:54px; height:54px; border-radius:50%; border:0; padding:0; margin:0;
           background:var(--btn); color:#fff; box-shadow:var(--elev-3); cursor:pointer; }
         .fab svg{ width:26px; height:26px; }
         .fab:active{ transform:scale(.93); }
         /* Menu open -> FAB weg (v178): de + knop kan dan nooit vóór de ballon vallen. */
         .navtoggle:checked ~ .fab{ visibility:hidden; }
-        main{ padding-bottom:calc(var(--pill-gap) + 96px); }
+        /* v195 (review #5b/c): clearance voor tabbar + FAB — content nooit half verstopt. */
+        main{ padding-bottom:calc(var(--pill-gap) + 148px); }
       }
       /* ---- Motion-laag (Set 1): beweging als feedback/oriëntatie, token-gedreven. ---- */
       @view-transition { navigation: auto; }
@@ -834,12 +897,26 @@ export function layout(title: string, active: string, body: Body, roles: string[
          verticaal); header en pill blijven stilstaan -> native gevoel. */
       main{ view-transition-name:page; }
       ::view-transition-old(root), ::view-transition-new(root){ animation:none; }
-      ::view-transition-old(page){ animation:vt-out .16s ease both; }
-      ::view-transition-new(page){ animation:vt-in .2s ease both; }
-      @keyframes vt-out{ to{ opacity:0; transform:translateY(4px); } }
-      @keyframes vt-in{ from{ opacity:0; transform:translateY(6px); } }
+      /* v195 (review 12/6 #3): sequentieel i.p.v. crossfade — oud is vrijwel weg
+         vóór nieuw verschijnt -> geen tekst-op-tekst/dubbele belichting. */
+      ::view-transition-group(page){ animation:none; }
+      ::view-transition-old(page){ animation:vt-out .11s ease-out both; }
+      ::view-transition-new(page){ animation:vt-in .16s ease-out .09s both; }
+      @keyframes vt-out{ to{ opacity:0; } }
+      @keyframes vt-in{ from{ opacity:0; transform:translateY(8px); } }
       ::view-transition-group(ff-header), ::view-transition-group(ff-botnav){ animation:none; }
-      ::view-transition-old(ff-header), ::view-transition-new(ff-header), ::view-transition-old(ff-botnav), ::view-transition-new(ff-botnav){ animation:none; mix-blend-mode:normal; }
+      /* v197: NIEUWE header/capsule direct tonen, oude verbergen. Met alleen
+         animation:none bleef de OUDE snapshot op opacity 1 staan zolang de
+         transitie liep — binnen de shell onzichtbaar (headers identiek), maar
+         home<->module "hing" de oude header zichtbaar over de nieuwe pagina
+         (video 14:22). */
+      ::view-transition-old(ff-header), ::view-transition-old(ff-botnav){ animation:none; opacity:0; mix-blend-mode:normal; }
+      ::view-transition-new(ff-header), ::view-transition-new(ff-botnav){ animation:none; opacity:1; mix-blend-mode:normal; }
+      /* v195 (review #2): FAB geïsoleerd met eigen naam — kan nooit met een ander
+         element (avatar) gepaard worden; fadet sequentieel mee met de page. */
+      ::view-transition-group(ff-fab){ animation:none; }
+      ::view-transition-old(ff-fab){ animation:vt-out .11s ease-out both; }
+      ::view-transition-new(ff-fab){ animation:vt-in .16s ease-out .09s both; }
       @keyframes ffShimmer{ from{ background-position:200% 0 } to{ background-position:-200% 0 } }
       @keyframes emojiPop{ 0%{ transform:scale(1) } 40%{ transform:scale(1.32) } 100%{ transform:scale(1) } }
       .skeleton{ background:linear-gradient(90deg,var(--surface-2),var(--surface),var(--surface-2)); background-size:200% 100%;
@@ -890,7 +967,7 @@ export function layout(title: string, active: string, body: Body, roles: string[
            anders gedraagt position:fixed zich op iOS fout (niet-interactief / sluit bij tik). */
         .sheet-m{ position:fixed; left:0; right:0; bottom:var(--ff-kb, 0px); z-index:calc(var(--z-overlay) + 1); margin:0;
           max-height:min(88dvh, calc(var(--ff-vh, 100dvh) - 12px));
-          overflow-y:auto; -webkit-overflow-scrolling:touch; border-radius:22px 22px 0 0; box-shadow:var(--elev-3); background:var(--surface);
+          overflow-y:auto; border-radius:22px 22px 0 0; box-shadow:var(--elev-3); background:var(--surface);
           transform:translateY(100%); transition:transform var(--dur-fast) var(--ease-in); animation:none !important;
           padding:8px 18px calc(env(safe-area-inset-bottom) + 24px); }
         .sheet-m.open{ transform:none; transition:transform var(--dur-screen) var(--ease-out); }
@@ -913,7 +990,7 @@ export function layout(title: string, active: string, body: Body, roles: string[
       .subtab:hover{ color:var(--ink); }
       .subtab.on{ color:#fff; background:var(--green); border-color:var(--green); }
       .subtab:active{ transform:scale(.96); }
-      @media (max-width:880px){ .subtabs{ flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; margin:0 -2px 14px; padding-bottom:10px; }
+      @media (max-width:880px){ .subtabs{ flex-wrap:nowrap; overflow-x:auto; margin:0 -2px 14px; padding-bottom:10px; }
         .subtabs::-webkit-scrollbar{ display:none; } }
       /* Pull-to-refresh (Set 2): omlaagtrekken bovenaan om te verversen (mobiel). */
       .ptr{ position:fixed; top:0; left:50%; z-index:var(--z-overlay); width:38px; height:38px; border-radius:50%;
@@ -983,6 +1060,7 @@ export function layout(title: string, active: string, body: Body, roles: string[
       [tabindex]:focus-visible, label[for="navtoggle"]:focus-visible{
         outline:2px solid var(--accent); outline-offset:2px; }
       ${raw(LOODS_CSS)}
+      ${raw(HOME_SHELL_CSS)}
     </style>
   </head>
   <body>
@@ -991,9 +1069,11 @@ export function layout(title: string, active: string, body: Body, roles: string[
     <div class="hglass" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
     <header class="app">
       <label for="navtoggle" class="burger" aria-label="Menu openen">${svg("menu")}</label>
+      ${raw('<button type="button" class="hai" id="ff-ai-open" aria-label="AI-assistent" title="Vraag het de assistent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.8 8.7 19 10.5 13.8 12.3 12 17.5 10.2 12.3 5 10.5 10.2 8.7Z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8Z"/></svg></button>')}
       <span class="pagetag">${title}</span>
       <span class="hsync" aria-hidden="true">${svg("refresh")}</span>
-      <a href="/zoek" class="hsearch" aria-label="Zoeken">${svg("search")}</a>
+      ${/* v202: vergrootglas weg — de assistent (sparkle, linksboven) is dé zoek-ingang;
+           /zoek blijft bestaan als pagina (zijbalk-link + deep links). */ ""}
       ${headerAvatar(roles)}
     </header>
     <div id="toastwrap" class="toastwrap" aria-live="polite" aria-atomic="false"></div>
@@ -1007,6 +1087,17 @@ export function layout(title: string, active: string, body: Body, roles: string[
     <div id="ff-scrim" class="ff-scrim" hidden></div>
     <div id="ff-lightbox" class="ff-lightbox" hidden aria-hidden="true"><button class="lb-close" type="button" aria-label="Sluiten">✕</button><img alt="" /></div>
     <div id="ff-snackbar" class="ff-snackbar" role="status" hidden><span class="sb-msg"></span><button class="sb-undo" type="button">Ongedaan maken</button></div>
+    ${raw(`<div id="ff-ai-scrim" class="ai-scrim" aria-hidden="true"></div>
+    <section id="ff-ai" class="ai-sheet" role="dialog" aria-modal="true" aria-label="Assistent" hidden>
+      <div class="ai-head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.8 8.7 19 10.5 13.8 12.3 12 17.5 10.2 12.3 5 10.5 10.2 8.7Z"/></svg><strong>Assistent</strong><button type="button" id="ff-ai-close" class="ai-x" aria-label="Sluiten">&#10005;</button></div>
+      <div class="ai-body" id="ff-ai-body">
+        <p class="ai-hint">Zoek iets of stel een vraag. Ik zoek intern (nieuws, documenten, agenda, collega's) en beantwoord vragen — uit onze kennisbank als het kan, met bronnen erbij.</p>
+      </div>
+      <form id="ff-ai-form" class="ai-form" autocomplete="off">
+        <input id="ff-ai-q" type="text" maxlength="500" placeholder="Zoek of vraag iets&hellip;" aria-label="Zoek of vraag iets" />
+        <button type="submit" class="ai-send" aria-label="Versturen"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
+      </form>
+    </section>`)}
     ${bottomNav(active, roles)}${fab(active)}
     <footer>Intern platform · ingelogd via Cloudflare Access · <a href="/bug">Bug melden</a> · <span class="buildtag">${BUILD}</span></footer>
     <div id="ff-tour" role="dialog" aria-modal="true" aria-labelledby="ff-tour-title" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.45);align-items:center;justify-content:center;padding:20px">
@@ -1035,6 +1126,78 @@ export function layout(title: string, active: string, body: Body, roles: string[
           if (ok) ok.addEventListener("click", done);
           el.addEventListener("click", function (e) { if (e.target === el) done(); });
         } catch (e) {}
+      })();
+    </script>
+    <script>
+      // v200: AI-assistent-sheet — gecombineerd intern zoeken + AI-antwoord (/api/assist).
+      // Leeft in het shell-chroom: het gesprek blijft staan terwijl je navigeert.
+      (function () {
+        var open = document.getElementById("ff-ai-open"), sheet = document.getElementById("ff-ai"),
+            scrim = document.getElementById("ff-ai-scrim"), form = document.getElementById("ff-ai-form"),
+            q = document.getElementById("ff-ai-q"), body = document.getElementById("ff-ai-body"),
+            close = document.getElementById("ff-ai-close");
+        if (!open || !sheet || !form || !q || !body) return;
+        // v201: uitlijning — de sheet volgt het toetsenbord via visualViewport
+        // (de --ff-kb-variabele wordt niet op elke pagina bijgehouden; daardoor
+        // zweefde de sheet los boven de onderkant, screenshot PJ 15:00).
+        var vv = window.visualViewport;
+        function kbFix() {
+          if (sheet.hidden || !vv) return;
+          var off = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+          sheet.style.bottom = "calc(" + Math.round(off + 12) + "px + env(safe-area-inset-bottom))";
+        }
+        if (vv) { vv.addEventListener("resize", kbFix); vv.addEventListener("scroll", kbFix); }
+        function setOpen(on) {
+          if (on) {
+            sheet.hidden = false;
+            kbFix();
+            requestAnimationFrame(function () { requestAnimationFrame(function () { sheet.classList.add("open"); }); });
+            if (scrim) scrim.classList.add("show");
+            setTimeout(function () { try { q.focus({ preventScroll: true }); } catch (e) {} kbFix(); }, 250);
+          } else {
+            sheet.classList.remove("open");
+            if (scrim) scrim.classList.remove("show");
+            setTimeout(function () { if (!sheet.classList.contains("open")) { sheet.hidden = true; sheet.style.bottom = ""; } }, 320);
+            try { q.blur(); } catch (e) {}
+          }
+        }
+        open.addEventListener("click", function () { setOpen(!sheet.classList.contains("open")); });
+        if (close) close.addEventListener("click", function () { setOpen(false); });
+        if (scrim) scrim.addEventListener("click", function () { setOpen(false); });
+        document.addEventListener("keydown", function (e) { if (e.key === "Escape") setOpen(false); });
+        // Interne treffer aangetikt -> sheet dicht, SPA-router neemt de navigatie over.
+        body.addEventListener("click", function (e) { if (e.target.closest && e.target.closest("a[href]")) setOpen(false); });
+        function esc(s) { var d = document.createElement("div"); d.textContent = String(s == null ? "" : s); return d.innerHTML; }
+        function add(htmlStr, cls) { var d = document.createElement("div"); d.className = "ai-msg " + cls; d.innerHTML = htmlStr; body.appendChild(d); body.scrollTop = body.scrollHeight; return d; }
+        var busy = false;
+        form.addEventListener("submit", function (e) {
+          e.preventDefault();
+          var v = (q.value || "").trim();
+          if (!v || busy) return;
+          busy = true; q.value = "";
+          add(esc(v), "me");
+          var wait = add('<span class="ai-dots"><i></i><i></i><i></i></span>', "bot");
+          fetch("/api/assist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: v }) })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              var out = "";
+              if (d.answer) {
+                if (d.mode === "algemeen") out += '<span class="ai-tag">Algemene kennis (AI)</span>';
+                if (d.mode === "web") out += '<span class="ai-tag">Van het web (AI)</span>'; // v206
+                out += esc(d.answer).replace(/\\n/g, "<br>");
+                if (d.sources && d.sources.length) out += '<div class="ai-src">' + d.sources.map(function (s) { return s.url ? '<a href="' + esc(s.url) + '"' + (String(s.url).indexOf("http") === 0 ? ' target="_blank" rel="noopener"' : "") + '>' + esc(s.title) + "</a>" : "<span>" + esc(s.title) + "</span>"; }).join("") + "</div>";
+              }
+              var tr = (d.treffers || []).reduce(function (a, g) { return a.concat(g.items.map(function (it) { return { g: g.label, t: it.titel, r: it.route }; })); }, []).slice(0, 6);
+              if (tr.length) {
+                out += '<div class="ai-tag" style="margin-top:' + (d.answer ? "10px" : "0") + '">Gevonden op het intranet</div><div class="ai-src">' + tr.map(function (x) { return '<a href="' + esc(x.r) + '">' + esc(x.t) + "</a>"; }).join("") + "</div>";
+              }
+              if (!out) out = esc("Niets gevonden — probeer andere woorden, of stel het als vraag.");
+              wait.innerHTML = out;
+              body.scrollTop = body.scrollHeight;
+            })
+            .catch(function () { wait.textContent = "Er ging iets mis — probeer het nog eens."; })
+            .then(function () { busy = false; });
+        });
       })();
     </script>
     <script>
@@ -1802,7 +1965,7 @@ export function layout(title: string, active: string, body: Body, roles: string[
           try { if (haps) { haps.checked = !haps.checked; } } catch (e) {}
         };
         document.addEventListener("click", function (e) {
-          var t = e.target.closest ? e.target.closest(".botnav-item, .fab, .subtab, .navitem, .pill, .emojibtn") : null;
+          var t = e.target.closest ? e.target.closest(".botnav-item, .fab, .subtab, .navitem, .pill, .emojibtn, .hai, .ai-send") : null;
           if (t && !t.disabled) window.ffHaptic(6);
           var sb = e.target.closest ? e.target.closest('button[type="submit"], input[type="submit"]') : null;
           if (sb && !sb.disabled) window.ffHaptic(12); // succes/verzonden-tik
@@ -1897,6 +2060,8 @@ export function layout(title: string, active: string, body: Body, roles: string[
           var u; try { u = new URL(a.href, location.href); } catch (x) { return false; }
           if (u.origin !== location.origin) return false;
           var p = u.pathname;
+          // v198: home is nu een shell-pagina — de router handelt "/" weer gewoon af
+          // (de v192-uitzondering is daarmee vervallen; terug naar home = content-swap).
           if (p.indexOf("/api/") === 0 || p.indexOf("/portaal") === 0 || p.indexOf("/cdn-cgi/") === 0) return false;
           if (/\.(png|jpe?g|webp|gif|svg|ico|pdf|ics|csv|xlsx|docx|zip|js|json|webmanifest)$/i.test(p)) return false;
           return true;
@@ -1956,6 +2121,7 @@ export function layout(title: string, active: string, body: Body, roles: string[
           var served = false;   // cache-versie al getoond
           var netDone = false;  // netwerk-pad heeft al afgerond
           var servedTxt = null;
+          var pendingDoc = null, pendingTxt = null; // cache-hit die in het race-venster wacht (v198)
           // Skeleton-laadstaat (v184, designsysteem §3.15): alleen bij een koude navigatie
           // (geen SWR-cache-hit) die >300ms duurt — sneller dan dat zou de shimmer flitsen.
           var skelTimer = setTimeout(function () {
@@ -1968,21 +2134,30 @@ export function layout(title: string, active: string, body: Body, roles: string[
             m.innerHTML = s + "</div></div>";
             setScroll(0);
           }, 300);
-          // 1) Instant-pad (SWR): eerder bezochte pagina direct uit cache renderen.
+          // 1) Instant-pad (SWR) met race-venster (v198): geef het netwerk eerst ~120ms
+          // de kans. Wint het netwerk, dan is er maar ÉÉN render (geen dubbele swap =
+          // geen stotter). Pas daarna valt hij terug op de cache-versie.
           getCache(url).then(function (txt) {
             if (!txt || netDone || served) return;
             var doc = parseDoc(txt);
             if (!validDoc(doc)) return;
-            served = true; servedTxt = txt;
-            clearTimeout(skelTimer);
-            var run = function () {
-              swap(doc);
-              if (mode === "push" && url !== location.href) { try { history.pushState({}, "", url); } catch (e) {} }
-              setScroll(scrollY || 0);
-              document.dispatchEvent(new CustomEvent("ff:page"));
-            };
-            busy = false; // direct weer interactief; netwerk-update volgt stil
-            if (document.startViewTransition) { document.startViewTransition(run); } else { run(); }
+            pendingDoc = doc; pendingTxt = txt;
+            setTimeout(function () {
+              if (netDone || served) return; // netwerk was sneller -> niets te doen
+              served = true; servedTxt = txt;
+              clearTimeout(skelTimer);
+              var run = function () {
+                var m0 = qs(".shell main"); if (m0) m0.classList.remove("ff-noanim");
+                swap(doc);
+                if (mode === "push" && url !== location.href) { try { history.pushState({}, "", url); } catch (e) {} }
+                setScroll(scrollY || 0);
+                document.dispatchEvent(new CustomEvent("ff:page"));
+              };
+              busy = false; // direct weer interactief; netwerk-update volgt stil
+              // v201: try/catch — snelle opeenvolgende wissels gooiden een onschuldige
+              // maar onafgevangen InvalidStateError (audit 12/6 §0).
+              if (document.startViewTransition) { try { document.startViewTransition(run); } catch (e) { run(); } } else { run(); }
+            }, 120);
           });
           // 2) Netwerk-pad: vers ophalen, cache bijwerken, en stil verversen bij verschil.
           fetch(url, { credentials: "include", headers: { "Accept": "text/html" }, redirect: "follow" })
@@ -2000,10 +2175,13 @@ export function layout(title: string, active: string, body: Body, roles: string[
               if (served) {
                 // Stille revalidate: alleen bij echt verschil; scrollpositie blijft staan,
                 // geen view-transition en geen scroll-reset -> nul zichtbare sprong.
+                // v198: entree-animaties uit tijdens deze tweede swap (ff-noanim) —
+                // het opnieuw afspelen van fadeUp wás de zichtbare stotter.
                 busy = false;
                 if (servedTxt === res.txt) return;
                 var sc = qs(".shell");
                 var keep = sc && sc.scrollTop ? sc.scrollTop : (window.scrollY || 0);
+                var mS = qs(".shell main"); if (mS) mS.classList.add("ff-noanim");
                 swap(doc);
                 if (sc) sc.scrollTop = keep; else window.scrollTo(0, keep);
                 if (res.fin !== location.href) { try { history.replaceState(history.state || {}, "", res.fin); } catch (e) {} }
@@ -2011,19 +2189,36 @@ export function layout(title: string, active: string, body: Body, roles: string[
                 return;
               }
               var run = function () {
+                var mN = qs(".shell main"); if (mN) mN.classList.remove("ff-noanim");
                 swap(doc);
                 if (mode === "push" && res.fin !== location.href) { try { history.pushState({}, "", res.fin); } catch (e) {} }
                 setScroll(scrollY || 0);
                 document.dispatchEvent(new CustomEvent("ff:page"));
               };
               busy = false;
-              if (document.startViewTransition) { document.startViewTransition(run); } else { run(); }
+              // v201: try/catch — snelle opeenvolgende wissels gooiden een onschuldige
+              // maar onafgevangen InvalidStateError (audit 12/6 §0).
+              if (document.startViewTransition) { try { document.startViewTransition(run); } catch (e) { run(); } } else { run(); }
             })
             .catch(function () {
               netDone = true;
               clearTimeout(skelTimer);
               busy = false;
               // Offline/fout met cache-weergave op het scherm: stil laten staan (werkt!).
+              // v198: faalt het netwerk binnen het race-venster, render dan alsnog de
+              // wachtende cache-versie via het normale SPA-pad (offline blijft soepel).
+              if (!served && pendingDoc) {
+                served = true; servedTxt = pendingTxt;
+                var runC = function () {
+                  var mC = qs(".shell main"); if (mC) mC.classList.remove("ff-noanim");
+                  swap(pendingDoc);
+                  if (mode === "push" && url !== location.href) { try { history.pushState({}, "", url); } catch (e) {} }
+                  setScroll(scrollY || 0);
+                  document.dispatchEvent(new CustomEvent("ff:page"));
+                };
+                if (document.startViewTransition) { try { document.startViewTransition(runC); } catch (e) { runC(); } } else { runC(); }
+                return;
+              }
               // Zonder cache: volledige navigatie (de service worker serveert dan zijn cache).
               if (!served) location.assign(url);
             });

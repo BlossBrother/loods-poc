@@ -16,6 +16,7 @@ export const NOTIF_MODULES: { key: string; label: string }[] = [
   { key: "nieuws", label: "Nieuws" },
   { key: "prikbord", label: "Prikbord" },
   { key: "meldingen", label: "Meldingen (weekoverzicht)" },
+  { key: "team", label: "Waar werk je vandaag? (ochtendvraag, ma-vr)" }, // v204
 ];
 
 function db(env: Env): D1Database {
@@ -75,6 +76,8 @@ export async function markRead(env: Env, email: string, id?: string | null): Pro
 // Centrale flow: historie + push voor alle actieve medewerkers met deze module aan.
 // pushEmail: levert per gebruiker af (krijgt badge_count mee); pushAnoniem: optioneel
 // voor apparaten die zich zonder e-mail abonneerden (krijgen geen historie/badge).
+// v204: 'team' toegevoegd — de ochtend-statuspush ("Waar werk je vandaag?") is
+// per gebruiker uitzetbaar via Notificaties → Voorkeuren.
 export async function notifyAlle(
   env: Env,
   n: NotifInput,
@@ -113,4 +116,21 @@ export async function notifyAlle(
 // AVG: notificatie-historie ouder dan 90 dagen opruimen (cron).
 export async function purgeNotificaties(env: Env): Promise<void> {
   await db(env).prepare("DELETE FROM notificaties WHERE created_at < ?").bind(Date.now() - 90 * 24 * 60 * 60 * 1000).run();
+}
+
+// v203: cascade-opruimen — als de bron (event/nieuws) verwijderd wordt, horen de
+// bijbehorende notificatie-rijen bij ALLE ontvangers ook weg (melding PJ 12/6:
+// "lollig" agendapunt bleef in ieders notificatiecentrum staan). NB: een push die
+// al op een toestel is afgeleverd, kan technisch niet worden teruggetrokken.
+export async function verwijderNotificatiesVoorUrl(env: Env, urlDeel: string): Promise<void> {
+  if (!urlDeel) return;
+  await db(env).prepare("DELETE FROM notificaties WHERE url LIKE ?").bind(`%${urlDeel}%`).run();
+}
+
+// v203: eigen notificaties beheren — één wissen of alles wissen (alleen eigen rijen).
+export async function verwijderNotificatie(env: Env, email: string, id: string): Promise<void> {
+  await db(env).prepare("DELETE FROM notificaties WHERE id=? AND user_email=?").bind(id, email.toLowerCase()).run();
+}
+export async function verwijderAlleNotificaties(env: Env, email: string): Promise<void> {
+  await db(env).prepare("DELETE FROM notificaties WHERE user_email=?").bind(email.toLowerCase()).run();
 }

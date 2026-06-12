@@ -43,7 +43,8 @@ function meldingItem(m: Melding, kanAfhandelen: boolean) {
 function sectie(titel: string, items: Melding[], kanAfhandelen: boolean) {
   return html`${eyebrow(`${titel} · ${items.length} open`)}
     ${items.length === 0
-      ? html`<article class="card"><p class="empty" style="margin:0">Geen openstaande meldingen.</p></article>`
+      ? html`<article class="card"><p class="empty" style="margin:0 0 10px">Geen openstaande meldingen — fijn!</p>
+          <button type="button" class="btn btn-soft" data-sheet="ff-meld-new" style="margin:0">+ Melding maken</button></article>`
       : html`<article class="card listcard"><ul class="clean">${items.map((m) => meldingItem(m, kanAfhandelen))}</ul></article>`}`;
 }
 

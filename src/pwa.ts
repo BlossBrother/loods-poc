@@ -3,7 +3,7 @@ import { ICON_192_B64, ICON_512_B64, b64ToBytes } from "./icons";
 export const THEME = "#2f8b54";
 
 // Zichtbaar buildversie-label (footer/menu). Aflezen op toestel = welke versie laadt er echt.
-export const BUILD = "v189";
+export const BUILD = "v207";
 
 export const MANIFEST = {
   name: "Fresh Forward",
@@ -27,7 +27,7 @@ export const MANIFEST = {
 // - Na een actie (?ok=... na in-/uitchecken, posten, opslaan): altijd vers van
 //   het netwerk, zodat je je wijziging direct ziet.
 export const SERVICE_WORKER = `
-const CACHE = "ff-v161";
+const CACHE = "ff-v179";
 const WARM = ["/smoelenboek", "/competitie", "/social"];
 
 self.addEventListener("install", function () { self.skipWaiting(); });
@@ -71,6 +71,29 @@ self.addEventListener("fetch", function (e) {
 
   var accept = req.headers.get("accept") || "";
   var isHTML = req.mode === "navigate" || accept.indexOf("text/html") !== -1;
+
+  // v192: home ("/") = stale-while-revalidate. Home is een standalone pagina met
+  // server-side Airtable-werk en laadde daardoor telkens zichtbaar traag (video 12/6).
+  // De cache toont 'm direct; het verse antwoord wordt op de achtergrond opgeslagen
+  // en is er bij het volgende bezoek. Deploys blijven zichtbaar: de CACHE-bump per
+  // deploy leegt deze cache sowieso.
+  // v193: ?ok=-redirects (na een actie) slaan de cache over — je eigen wijziging
+  // moet je direct terugzien, niet de stale gecachte home.
+  if (isHTML && url.pathname === "/" && url.search.indexOf("ok=") === -1) {
+    e.respondWith(
+      caches.open(CACHE).then(function (cache) {
+        return cache.match("/").then(function (cached) {
+          var fetched = fetch(req).then(function (res) {
+            if (res && res.ok) cache.put("/", res.clone());
+            return res;
+          }).catch(function () { return cached; });
+          e.waitUntil(fetched.catch(function () {}));
+          return cached || fetched;
+        });
+      })
+    );
+    return;
+  }
 
   // Pagina's: NETWORK-FIRST -> een nieuwe deploy is meteen zichtbaar (geen stale UI).
   // Offline of bij netwerkfout valt het netjes terug op de cache.

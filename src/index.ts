@@ -2,12 +2,14 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { layout, errorPage } from "./views/layout";
 import { voorJouPage, nieuwsPagina, documentenPagina } from "./views/intranet";
-import { loodsHome } from "./views/home2";
+import { homeShellContent } from "./views/home2";
 import { crmDb, listTaken } from "./crm/data";
 import { buildForYou, touchSeen, groet, type ForYou } from "./foryou";
 import { getHeaderConfig, getVariants, pickGreeting, amsterdamHour, saveHeaderConfig, saveVariants, resetHeader, DEFAULT_CONFIG, DEFAULT_VARIANTS, type HeaderConfig, type GreetingVariant } from "./headercfg";
 import { beheerHeader } from "./views/beheerheader";
-import { ask as kbAsk, reindexAll as kbReindex } from "./rag";
+import { ask as kbAsk, reindexAll as kbReindex, algemeenAntwoord, removeDoc as removeKbDoc, webZoek } from "./rag";
+import { listDump, verwerkDump, zetDumpAudience, verwijderDump } from "./kennisdump";
+import { haalAnalytics } from "./analytics";
 import { stijlgidsPage } from "./views/stijlgids";
 import { getNavLayout, navSidebarPayload, saveNavGroups, saveModuleGroups } from "./nav";
 import { bezoekPage } from "./views/bezoek";
@@ -31,9 +33,11 @@ import {
   beheerSnoeiPluk,
   beheerKlantdocumenten,
   beheerLeesbevestiging,
+  beheerKennisdump,
+  beheerAnalytics,
   type LeesItem,
 } from "./views/beheer";
-import { bevestigGelezen, gelezenDoor, leesOverzicht } from "./leesbevestiging";
+import { bevestigGelezen, gelezenDoor, leesOverzicht, registreerGezien } from "./leesbevestiging";
 import { syncAccessUitzendkrachten, accessSyncGeconfigureerd } from "./accesssync";
 import { zetStatus, wieIsErVandaag, opschoonAanwezigheid, isAanwStatus } from "./aanwezigheid";
 import { vandaagPage } from "./views/vandaag";
@@ -45,7 +49,7 @@ import { restoreEvent } from "./agenda";
 import { deleteLastMatch } from "./elo";
 import { homeSummary } from "./summary";
 import { reindexZoek, zoekFts, type ZoekGroep } from "./zoekindex";
-import { notifyAlle, listNotificaties, getNotificatie, markRead, getPrefs, setPref, unreadCount, purgeNotificaties, NOTIF_MODULES } from "./notify";
+import { notifyAlle, listNotificaties, getNotificatie, markRead, getPrefs, setPref, unreadCount, purgeNotificaties, NOTIF_MODULES, verwijderNotificatiesVoorUrl, verwijderNotificatie, verwijderAlleNotificaties } from "./notify";
 import { notificatiesPage } from "./views/notificaties";
 import { rateLimit, limietKey } from "./ratelimit";
 import { auditPage, type AuditRij } from "./views/auditlog";
@@ -134,7 +138,7 @@ import {
   getLedger, addOrder, addTopup, settle, setBalance, allBalances, ordersSince,
 } from "./snacks";
 import { frietBestel, mijnSaldo, frietBeheer } from "./views/friet";
-import { getEventsInRange, getEvent, createEvent, updateEvent, deleteEvent } from "./agenda";
+import { getEventsInRange, getEvent, createEvent, updateEvent, deleteEvent, zetRsvp, rsvpStand } from "./agenda";
 import { agendaPage, eventDetail, verlofPage } from "./views/agenda";
 import { getVerlofInRange, getActiveMedewerkers } from "./verlof";
 import { syncVerlof } from "./buddee";
@@ -366,6 +370,32 @@ async function weekelijkseMeldingenPush(env: Env): Promise<void> {
   }
 }
 
+// v204: ochtend-push "Waar werk je vandaag?" (08:15 Amsterdam, ma-vr) — alleen
+// naar wie vandaag nog GEEN status heeft én niet met verlof is (Buddee). Eén tik
+// op de push = deeplink naar /vandaag. Opt-out per gebruiker via Notificaties →
+// Voorkeuren (module 'team'). Eenmaal-per-dag-slot via app_settings.
+async function ochtendStatusPush(env: Env): Promise<void> {
+  if (amsterdamHour() !== 8) return; // de andere DST-trigger (zomer/winter) slaat over
+  const wd = new Intl.DateTimeFormat("en-US", { timeZone: "Europe/Amsterdam", weekday: "short" }).format(new Date());
+  if (wd === "Sat" || wd === "Sun") return;
+  if (!env.DB) return;
+  const dag = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Amsterdam" }).format(new Date());
+  const slot = await env.DB.prepare("SELECT value FROM app_settings WHERE tenant_id='default' AND key='wwv_laatst'").first<{ value: string }>().catch(() => null);
+  if (slot?.value === dag) return; // al verstuurd vandaag
+  await env.DB.prepare("INSERT INTO app_settings (tenant_id, key, value, updated_at) VALUES ('default','wwv_laatst',?,?) ON CONFLICT(tenant_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at")
+    .bind(dag, Date.now()).run();
+  const { rijen } = await wieIsErVandaag(env);
+  const doel = rijen.filter((r) => !r.verlof && !r.status && r.email).map((r) => r.email);
+  if (!doel.length) return;
+  await notifyAlle(
+    env,
+    { module: "team", titel: "Waar werk je vandaag?", body: "Eén tik: kantoor, thuis of op pad — handig voor je collega's.", url: "/vandaag" },
+    doel,
+    (email, payload) => pushNaarEmail(env, email, payload),
+  );
+  console.log(`Ochtend-statuspush verstuurd naar ${doel.length} collega('s).`);
+}
+
 // Push bij een nieuw/gewijzigd agenda-item (indien aangezet).
 async function agendaPush(env: Env, ev: { title: string; start_at: number; location?: string }, url: string): Promise<void> {
   if (!(await getFlag(env, "push_agenda", true))) return;
@@ -541,6 +571,27 @@ app.get("/", async (c) => {
   if (enabledForYou.has("kantine") && (await getFlag(c.env, "bestellijst_open", true))) {
     kantine = { titel: "Friet bestellen kan nog", sub: "De bestellijst is open", route: "/friet" };
   }
+  // v201 (audit 12/6 §C1): afwezigen van vandaag óp home — zelfde bron als /vandaag.
+  // AVG-veilige default: alleen "afwezig", geen verloftype (open HR-besluit v185).
+  let afwezig: { aantal: number; sub: string } | null = null;
+  // v204: one-tap-statusvraag op home (ma-vr, alleen als je vandaag nog niets
+  // hebt ingevuld en niet met verlof bent) — de zachte tegenhanger van de
+  // ochtend-push; bewust GEEN blokkerende vraag bij het openen (te opdringerig).
+  let statusVraag = false;
+  if (enabledForYou.has("team")) {
+    try {
+      const { rijen } = await wieIsErVandaag(c.env);
+      const weg = rijen.filter((r) => !!r.verlof);
+      if (weg.length > 0) {
+        const namen = weg.slice(0, 2).map((r) => r.naam.trim().split(/\s+/)[0]).join(", ");
+        afwezig = { aantal: weg.length, sub: weg.length > 2 ? `${namen} en ${weg.length - 2} anderen` : namen };
+      }
+      const mijEmail = (email ?? "").toLowerCase();
+      const mij = mijEmail ? rijen.find((r) => r.email.toLowerCase() === mijEmail) : undefined;
+      const wdH = new Intl.DateTimeFormat("en-US", { timeZone: "Europe/Amsterdam", weekday: "short" }).format(new Date());
+      statusVraag = !!mij && !mij.status && !mij.verlof && wdH !== "Sat" && wdH !== "Sun";
+    } catch { /* aanwezigheid niet beschikbaar -> geen rij/vraag */ }
+  }
   // BHV-banner: alleen bij een noodmelding van het afgelopen half uur.
   let alarm: { titel: string; sub: string; route: string } | null = null;
   try {
@@ -549,12 +600,35 @@ app.get("/", async (c) => {
       alarm = { titel: "Noodmelding actief", sub: `${nood.melder_naam ?? "Onbekend"}${nood.locatie ? ` · ${nood.locatie}` : ""}`, route: "/noodmelding" };
     }
   } catch { /* geen meldingen */ }
+  // v192: must-read-banner — recente nieuwsberichten (≤14 dagen) waarvoor deze
+  // gebruiker nog geen leesbevestiging gaf, als vaste kaart bovenaan home
+  // (rapport diepteonderzoek §3.1; bouwt op leesbevestiging v185).
+  let mustread: { titel: string; sub: string; route: string } | null = null;
+  // v194: banner alleen als de "Gelezen"-knop aanstaat (vlag lees_knop) — bij
+  // ghost-modus (stille registratie) is er niets om te bevestigen.
+  if (email && enabledForYou.has("nieuws") && (await getFlag(c.env, "lees_knop", false))) {
+    try {
+      const bevestigd = await gelezenDoor(c.env, email);
+      const RECENT_MS = 14 * 24 * 60 * 60 * 1000;
+      const open = nieuws.filter((n) => nu - momentVan(n) < RECENT_MS && !bevestigd.has(`nieuws:${n.id}`));
+      if (open.length > 0) {
+        mustread = {
+          titel: open.length === 1 ? "1 bericht wacht op je leesbevestiging" : `${open.length} berichten wachten op je leesbevestiging`,
+          sub: open[0].fields.Titel ?? "(zonder titel)",
+          route: open.length === 1 ? `/nieuws#nieuws-${open[0].id}` : "/nieuws",
+        };
+      }
+    } catch { /* tabel ontbreekt -> geen banner */ }
+  }
   // Teller-chips + Voor jou voeden uit dezelfde bron als de headerteller (foryou).
   const CHIP_ROUTE: Record<string, string> = { prikbord: "/social", meldingen: "/meldingen", nieuws: "/nieuws", agenda: "/agenda", competitie: "/competitie", kantine: "/friet", trainingen: "/trainingen", team: "/smoelenboek", documenten: "/documenten", crm: "/crm" };
   // v181: documenten = boek (was 'file', identiek aan Nieuws) — nu gelijk aan zijbalk/ballon.
   const CHIP_ICON: Record<string, string> = { prikbord: "msg", meldingen: "bell", nieuws: "file", agenda: "cal", competitie: "award", kantine: "coffee", trainingen: "book", team: "users", documenten: "book", crm: "brief" };
   const chips = fy.groups.filter((g) => g.count > 0).slice(0, 4).map((g) => ({ label: g.label, count: g.count, route: CHIP_ROUTE[g.moduleKey] ?? "/voor-jou", icon: CHIP_ICON[g.moduleKey] ?? "file" }));
   // App-snelkoppelingen als chips in dezelfde rij (blijven op home, zie afspraak).
+  // v205 (PJ): aanwezigheid als chip bovenin (teller = afwezigen) i.p.v. rij in de
+  // vandaag-kaart; WK-poule verdwijnt hier na het WK weer.
+  if (enabledForYou.has("team")) chips.push({ label: "Vandaag", count: afwezig?.aantal ?? 0, route: "/vandaag", icon: "users" });
   chips.push({ label: "WK-poule", count: 0, route: apps.wkPoule, icon: "ball" });
   chips.push({ label: "Buddee", count: 0, route: apps.buddee, icon: "users" });
   chips.push({ label: "TimeChimp", count: 0, route: apps.timechimp, icon: "clock" });
@@ -580,57 +654,29 @@ app.get("/", async (c) => {
     .filter((id) => id !== "crm" || (c.get("roles") ?? []).includes("crm"))
     .map((id) => ({ label: MODULE_LABEL.get(id) ?? id, route: CHIP_ROUTE[id] ?? "/", icon: CHIP_ICON[id] ?? "file" }));
   const _voornaam = me?.fields.Naam ? String(me.fields.Naam).trim().split(/\s+/)[0] : "";
-  const achternaam = me?.fields.Naam ? String(me.fields.Naam).trim().split(/\s+/).slice(-1)[0] : "";
-  // Profielfoto: zelfde bron als de shell-header (me:-token), dus identieke uitsnede.
-  const _rolesHome = c.get("roles") ?? [];
-  const meTok = _rolesHome.find((r: string) => r.indexOf("me:") === 0);
-  let profielFoto: string | undefined;
-  if (meTok) { try { profielFoto = (JSON.parse(meTok.slice(3)) as { f?: string }).f; } catch { profielFoto = undefined; } }
-  // Meer-menu: exact dezelfde bron en regels als het shell-menu (nav-token: groepen,
-  // module aan/uit, rol-filter) + vaste Account-groep en Beheer voor beheerders.
-  const navTokHome = _rolesHome.find((r: string) => r.indexOf("nav:") === 0);
-  const homeMenu: { titel: string; items: { label: string; route: string; icon: string }[] }[] = [];
-  if (navTokHome) {
-    try {
-      const pl = JSON.parse(navTokHome.slice(4)) as { g: [string, string][]; m: [string, string, number][] };
-      for (const [gid, gnaam] of pl.g) {
-        const items = pl.m
-          .filter((x) => x[1] === gid && !!x[2])
-          .filter((x) => x[0] !== "crm" || _rolesHome.includes("crm"))
-          .map((x) => ({ label: MODULE_LABEL.get(x[0]) ?? x[0], route: CHIP_ROUTE[x[0]] ?? "/", icon: CHIP_ICON[x[0]] ?? "file" }));
-        if (items.length) homeMenu.push({ titel: gnaam, items });
-      }
-    } catch { /* nav-token onleesbaar -> menu zonder modules */ }
-  }
-  homeMenu.push({ titel: "Account", items: [
-    { label: "Mijn account", route: "/mijn-account", icon: "user" },
-    { label: "Notificaties", route: "/notificaties", icon: "bell" },
-    { label: "Feedback", route: "/bug", icon: "bug" },
-  ] });
-  if (_rolesHome.includes("beheerder") || _rolesHome.includes("redacteur")) homeMenu.push({ titel: "Beheer", items: [{ label: "Inhoud-beheer", route: "/beheer", icon: "cog" }] });
   const _hcfg = await getHeaderConfig(c.env);
   const _hvars = await getVariants(c.env);
-  const badge = (k: string) => fy.groups.find((g) => g.moduleKey === k)?.count ?? 0;
-  return c.html(loodsHome({
-    groet: pickGreeting(_hcfg, _hvars, amsterdamHour()),
+  // v198: home draait nu ÍN de shell (layout) als gewone SPA-pagina — terug naar
+  // home is een content-swap zonder paginaherlaad (structurele fix stotteren).
+  // Meer-menu/tabbar/avatar/zoeken komen uit de shell zelf (zelfde nav-token).
+  return c.html(layout("Home", "/", homeShellContent({
+    groet: pickGreeting(_hcfg, _hvars, amsterdamHour(), `${email ?? "anon"}|${new Intl.DateTimeFormat("nl-NL", { timeZone: "Europe/Amsterdam" }).format(new Date())}|${amsterdamHour() < 12 ? "o" : amsterdamHour() < 18 ? "m" : "a"}`),
     voornaam: _voornaam,
-    initialen: (((_voornaam[0] ?? "") + (achternaam[0] ?? "")) || "FF").toUpperCase(),
-    profielFoto,
-    menu: homeMenu,
     datumregel: `${new Intl.DateTimeFormat("nl-NL", { timeZone: "Europe/Amsterdam", weekday: "long", day: "numeric", month: "long" }).format(new Date())} · Fresh Forward`,
     chips,
     alarm,
+    mustread,
     vandaag,
     kantine,
+    statusVraag,
     voorJou,
     nieuws: nieuwsCards,
     jarige: eersteJarige
       ? { naam: eersteJarige.naam.trim().split(/\s+/)[0], datum: eersteJarige.overDagen === 0 ? "vandaag" : `${eersteJarige.datum} · over ${eersteJarige.overDagen} ${eersteJarige.overDagen === 1 ? "dag" : "dagen"}`, vandaag: eersteJarige.overDagen === 0 }
       : null,
     snelNaar,
-    badges: { prikbord: badge("prikbord"), meldingen: badge("meldingen") },
     pushKey: c.env.VAPID_PUBLIC_KEY ?? "",
-  }));
+  }), c.get("roles") ?? []));
 });
 
 // ---- Nieuws: volledige artikelen + reacties (verhuisd van home; opruimslag) ----
@@ -696,7 +742,14 @@ app.get("/nieuws", async (c) => {
   c.executionCtx.waitUntil(touchSeen(c.env, me?.id, "nieuws").catch(() => {}));
   // Leesbevestiging (v185): welke berichten heeft deze gebruiker al bevestigd.
   const gelezen = email ? await gelezenDoor(c.env, email).catch(() => new Set<string>()) : new Set<string>();
-  return c.html(layout("Nieuws", "/nieuws", nieuwsPagina(nieuws, nieuwIds, reactiesByNieuws, !!me, emojiByNieuws, gelezen, !!email), c.get("roles") ?? []));
+  // v194: stille "gezien"-registratie (ghost) — pagina openen telt als gezien;
+  // de "Gelezen"-knop is alleen zichtbaar als de beheer-vlag 'lees_knop' aanstaat.
+  if (email) {
+    const naamGezien = me?.fields?.Naam ? String(me.fields.Naam) : null;
+    c.executionCtx.waitUntil(registreerGezien(c.env, "nieuws", nieuws.map((n) => n.id), email, naamGezien).catch(() => {}));
+  }
+  const leesKnop = await getFlag(c.env, "lees_knop", false);
+  return c.html(layout("Nieuws", "/nieuws", nieuwsPagina(nieuws, nieuwIds, reactiesByNieuws, !!me, emojiByNieuws, gelezen, !!email && leesKnop), c.get("roles") ?? []));
 });
 
 // ---- Documenten (verhuisd van home; opruimslag) ----
@@ -705,7 +758,13 @@ app.get("/documenten", async (c) => {
   // Leesbevestiging (v185): "Gelezen"-knop op documenten in categorie Beleid.
   const email = await resolveAccessEmail(c, c.env);
   const gelezen = email ? await gelezenDoor(c.env, email).catch(() => new Set<string>()) : new Set<string>();
-  return c.html(layout("Documenten", "/documenten", documentenPagina(documenten, gelezen, !!email), c.get("roles") ?? []));
+  // v194: stille "gezien"-registratie voor beleidsdocumenten (ghost); knop achter vlag.
+  if (email) {
+    const beleidIds = documenten.filter((d) => d.fields.Categorie === "Beleid").map((d) => d.id);
+    c.executionCtx.waitUntil(registreerGezien(c.env, "document", beleidIds, email, null).catch(() => {}));
+  }
+  const leesKnopDoc = await getFlag(c.env, "lees_knop", false);
+  return c.html(layout("Documenten", "/documenten", documentenPagina(documenten, gelezen, !!email && leesKnopDoc), c.get("roles") ?? []));
 });
 
 // Leesbevestiging vastleggen (v185) — idempotent; aangeroepen door de .lees-btn (layout).
@@ -1396,6 +1455,49 @@ app.post("/api/ask", async (c) => {
   return c.json(res);
 });
 
+// v200: gecombineerd zoeken + AI voor de assistent-sheet. Altijd interne
+// FTS-treffers; is de invoer een echte vraag, dan ook een AI-antwoord — eerst de
+// kennisbank (RAG, met bronnen), en weet die het niet: een gelabeld
+// algemene-kennis-antwoord (PJ 12/6).
+app.post("/api/assist", async (c) => {
+  const wie = await resolveAccessEmail(c, c.env);
+  const body = (await c.req.json().catch(() => ({}))) as { q?: string };
+  const q = String(body.q ?? "").slice(0, 500).trim();
+  if (!q) return c.json({ error: "leeg" }, 400);
+  const treffers = await zoekFts(c.env, q, 3).catch(() => [] as ZoekGroep[]);
+  const isVraag = /\?\s*$/.test(q)
+    || /^(hoe|wat|waar|wanneer|wie|waarom|hoeveel|welke?|kan|mag|moet|is|zijn|heb|heeft|werkt|leg|geef)\b/i.test(q)
+    || q.split(/\s+/).length >= 5;
+  let answer: string | undefined; let sources: { title: string; url?: string }[] | undefined;
+  let mode: "kennisbank" | "web" | "algemeen" | undefined;
+  if (isVraag) {
+    if (!rateLimit(limietKey("ask", wie, c.req.header("cf-connecting-ip")), 6, 60_000)) {
+      return c.json({ treffers, answer: "Even rustig aan — probeer het over een minuut opnieuw.", mode: "algemeen" });
+    }
+    const res = await kbAsk(c.env, q).catch(() => null);
+    // v201: agent-keten — het interne antwoord BEOORDELEN i.p.v. blind vertrouwen.
+    // De RAG vindt soms vaag verwante chunks ("kas" -> kantine/kassa) en zegt dan
+    // zélf "kan ik niet vinden in de context"; dat is geen antwoord -> door.
+    const weigering = (s: string) =>
+      s.length < 280 &&
+      /(kan|kon)[^.]{0,60}(geen|niet)[^.]{0,50}(vinden|terugvinden|beantwoorden)|geen informatie (gevonden|beschikbaar|over)|niet (terug te vinden|beschikbaar) in|(meegeleverde|gegeven|beschikbare) context|niet in de (context|kennisbank)/i.test(s);
+    if (res && res.answered && !weigering(res.answer)) { answer = res.answer; sources = res.sources; mode = "kennisbank"; }
+    else {
+      // v206: stap 3 — live webzoek (Tavily) mét bronnen; pas daarna kale modelkennis.
+      const web = await webZoek(c.env, q).catch(() => null);
+      if (web) { answer = web.answer; sources = web.sources; mode = "web"; }
+      else { answer = await algemeenAntwoord(c.env, q).catch(() => "Daar kan ik nu even niet bij — probeer het straks opnieuw."); mode = "algemeen"; }
+    }
+    c.executionCtx.waitUntil((async () => {
+      try {
+        if (c.env.DB) await c.env.DB.prepare("INSERT INTO ask_log (id, user_ref, question, answered, source_ids, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+          .bind("al" + crypto.randomUUID().replace(/-/g, ""), null, q, mode === "kennisbank" ? 1 : 0, JSON.stringify((sources ?? []).map((x) => x.title)), Date.now()).run();
+      } catch { /* log best-effort */ }
+    })());
+  }
+  return c.json({ treffers, answer, sources, mode });
+});
+
 app.post("/api/kennisbank/reindex", async (c) => {
   if (!(c.get("roles") ?? []).includes("beheerder")) return c.json({ error: "geen-toegang" }, 403);
   try {
@@ -1492,6 +1594,17 @@ app.post("/notificaties/gelezen", async (c) => {
   return c.redirect("/notificaties");
 });
 
+// v203: eigen notificaties wissen — per stuk of alles (alleen je eigen rijen).
+app.post("/notificaties/verwijder", async (c) => {
+  const email = await resolveAccessEmail(c, c.env);
+  if (!email) return c.redirect("/");
+  const form = await c.req.formData();
+  const id = String(form.get("id") ?? "");
+  if (id === "alles") await verwijderAlleNotificaties(c.env, email).catch(() => {});
+  else if (id) await verwijderNotificatie(c.env, email, id).catch(() => {});
+  return c.redirect("/notificaties");
+});
+
 app.post("/notificaties/prefs", async (c) => {
   const email = await resolveAccessEmail(c, c.env);
   if (!email) return c.redirect("/");
@@ -1555,9 +1668,9 @@ app.get("/beheer/modules", async (c) => {
   if (!(await magBeheren(c, medewerkers))) {
     return c.html(layout("Geen toegang", "/", geenToegang(), c.get("roles") ?? []), 403);
   }
-  const [navLayout, shoutoutsHome] = await Promise.all([getNavLayout(c.env), getFlag(c.env, "shoutouts_home", false)]);
+  const [navLayout, shoutoutsHome, leesKnop] = await Promise.all([getNavLayout(c.env), getFlag(c.env, "shoutouts_home", false), getFlag(c.env, "lees_knop", false)]);
   const melding = c.req.query("ok") ? "Menu-indeling opgeslagen." : undefined;
-  return c.html(layout("Menu-indeling", "/beheer/modules", beheerModules(navLayout, shoutoutsHome, { melding }), c.get("roles") ?? []));
+  return c.html(layout("Menu-indeling", "/beheer/modules", beheerModules(navLayout, shoutoutsHome, { melding, leesKnop }), c.get("roles") ?? []));
 });
 
 app.post("/beheer/modules", async (c) => {
@@ -1569,6 +1682,7 @@ app.post("/beheer/modules", async (c) => {
   const ids = form.getAll("module").map((v) => String(v));
   await setEnabledModules(c.env, ids);
   await setFlag(c.env, "shoutouts_home", form.get("shoutouts_home") != null);
+  await setFlag(c.env, "lees_knop", form.get("lees_knop") != null); // v194
   // Menu-indeling (groepen + module->group/order) uit het verborgen layout-veld.
   const rawLayout = String(form.get("layout") ?? "");
   if (rawLayout) {
@@ -1668,21 +1782,87 @@ app.get("/beheer/leesbevestiging", async (c) => {
   ]);
   const totaal = medewerkers.filter((m) => m.fields.Actief !== false && m.fields["E-mail"]).length;
   const stat = (k: string) => stats.get(k) ?? { aantal: 0, namen: [] };
+  // v194: naast expliciete bevestigingen ook de stille "gezien"-registratie tonen.
   const items: LeesItem[] = [
     ...nieuws.map((n) => ({
       type: "nieuws" as const,
       titel: n.fields.Titel ?? "(zonder titel)",
       meta: n.fields.Publicatiedatum ?? "",
       ...stat(`nieuws:${n.id}`),
+      gezien: stat(`nieuws_gezien:${n.id}`).aantal,
+      gezienNamen: stat(`nieuws_gezien:${n.id}`).namen,
     })),
     ...documenten.filter((d) => d.fields.Categorie === "Beleid").map((d) => ({
       type: "document" as const,
       titel: d.fields.Titel ?? "(zonder titel)",
       meta: d.fields.Categorie ?? "",
       ...stat(`document:${d.id}`),
+      gezien: stat(`document_gezien:${d.id}`).aantal,
+      gezienNamen: stat(`document_gezien:${d.id}`).namen,
     })),
   ];
   return c.html(layout("Leesbevestiging", "/beheer", beheerLeesbevestiging(items, totaal), c.get("roles") ?? []));
+});
+
+// ---- Analytics (v206): geaggregeerd beheerdashboard ----
+app.get("/beheer/analytics", async (c) => {
+  const medewerkers = await getMedewerkers(c.env);
+  if (!(await magBeheren(c, medewerkers))) return c.html(layout("Geen toegang", "/", geenToegang(), c.get("roles") ?? []), 403);
+  const data = await haalAnalytics(c.env);
+  // Noemer-fallback: D1-kolom 'actief' kan ontbreken — val terug op Airtable-bron.
+  if (!data.totaalActief) data.totaalActief = medewerkers.filter((m) => m.fields.Actief !== false && m.fields["E-mail"]).length;
+  return c.html(layout("Analytics", "/beheer", beheerAnalytics(data), c.get("roles") ?? []));
+});
+
+// ---- Kennisdump (v202): documenten droppen -> AI leest/categoriseert/indexeert ----
+app.get("/beheer/kennisdump", async (c) => {
+  const medewerkers = await getMedewerkers(c.env);
+  if (!(await magBeheren(c, medewerkers))) return c.html(layout("Geen toegang", "/", geenToegang(), c.get("roles") ?? []), 403);
+  const items = await listDump(c.env);
+  const ok = c.req.query("ok");
+  return c.html(layout("Kennisdump", "/beheer", beheerKennisdump(items, { melding: ok || undefined }), c.get("roles") ?? []));
+});
+
+app.post("/beheer/kennisdump", async (c) => {
+  const medewerkers = await getMedewerkers(c.env);
+  if (!(await magBeheren(c, medewerkers))) return c.text("geen toegang", 403);
+  const email = (await resolveAccessEmail(c, c.env)) ?? "beheer";
+  const form = await c.req.formData();
+  // workers-types typt getAll() als string[]; bestanden komen er als File in — cast.
+  const files = (form.getAll("bestand") as unknown as (string | File)[])
+    .filter((f): f is File => typeof f !== "string" && !!f && f.size > 0)
+    .slice(0, 8);
+  if (!files.length) return c.redirect("/beheer/kennisdump?ok=" + encodeURIComponent("Geen bestanden ontvangen."));
+  let okN = 0;
+  const fouten: string[] = [];
+  for (const f of files) {
+    if (f.size > 15 * 1024 * 1024) { fouten.push(`${f.name}: te groot (max 15MB)`); continue; }
+    const res = await verwerkDump(c.env, f.name, await f.arrayBuffer(), email)
+      .catch((e) => ({ ok: false as const, fout: String(e).slice(0, 120) }));
+    if (res.ok) okN++;
+    else fouten.push(`${f.name}: ${"fout" in res ? res.fout : "onbekend"}`);
+  }
+  const msg = `${okN} document${okN === 1 ? "" : "en"} verwerkt en geïndexeerd${fouten.length ? ` · mislukt: ${fouten.join("; ").slice(0, 280)}` : ""}`;
+  return c.redirect("/beheer/kennisdump?ok=" + encodeURIComponent(msg));
+});
+
+app.post("/beheer/kennisdump/audience", async (c) => {
+  const medewerkers = await getMedewerkers(c.env);
+  if (!(await magBeheren(c, medewerkers))) return c.text("geen toegang", 403);
+  const form = await c.req.formData();
+  const id = String(form.get("id") ?? "");
+  const klant = String(form.get("klant") ?? "0") === "1";
+  if (id) await zetDumpAudience(c.env, id, klant).catch(() => {});
+  return c.redirect("/beheer/kennisdump?ok=" + encodeURIComponent(klant ? "Zichtbaar gemaakt voor klanten (portaal-vraagbaak)." : "Weer alleen intern."));
+});
+
+app.post("/beheer/kennisdump/verwijder", async (c) => {
+  const medewerkers = await getMedewerkers(c.env);
+  if (!(await magBeheren(c, medewerkers))) return c.text("geen toegang", 403);
+  const form = await c.req.formData();
+  const id = String(form.get("id") ?? "");
+  if (id) await verwijderDump(c.env, id).catch(() => {});
+  return c.redirect("/beheer/kennisdump?ok=" + encodeURIComponent("Verwijderd uit de kennisbank."));
 });
 
 app.get("/beheer/audit", async (c) => {
@@ -1961,7 +2141,14 @@ app.post("/beheer/nieuws/verwijder", async (c) => {
     return c.html(layout("Geen toegang", "/", geenToegang(), c.get("roles") ?? []), 403);
   }
   const id = String((await c.req.formData()).get("id") ?? "");
-  if (id) await deleteInTabel(c.env, "Nieuws", id);
+  if (id) {
+    await deleteInTabel(c.env, "Nieuws", id);
+    // v205: cascade (zelfde als agenda v203) — notificaties + kennisbank-index mee opruimen.
+    c.executionCtx.waitUntil((async () => {
+      try { await verwijderNotificatiesVoorUrl(c.env, `nieuws-${id}`); } catch { /* best effort */ }
+      try { await removeKbDoc(c.env, "kbnws_" + id); } catch { /* best effort */ }
+    })());
+  }
   return c.redirect("/beheer/nieuws?ok=1");
 });
 
@@ -2368,7 +2555,24 @@ app.get("/agenda/event/:id", async (c) => {
   if (!isModuleOn(roles, "agenda")) return c.redirect("/");
   const e = await getEvent(c.env, c.req.param("id"));
   if (!e) return c.redirect("/agenda");
-  return c.html(layout(e.title, "/agenda", eventDetail(e, canEditAgenda(roles)), roles));
+  // v205: RSVP-blok — alleen op (semi-)toekomstige events; defensief als de
+  // tabel (migratie 0006) nog niet bestaat.
+  const emailRsvp = await resolveAccessEmail(c, c.env);
+  const toonRsvp = !!emailRsvp && e.end_at > Date.now() - 24 * 60 * 60 * 1000;
+  const stand = toonRsvp ? await rsvpStand(c.env, e.id, emailRsvp).catch(() => null) : null;
+  return c.html(layout(e.title, "/agenda", eventDetail(e, canEditAgenda(roles), stand), roles));
+});
+
+// v205: RSVP zetten — één tik, idempotent; terug naar het event.
+app.post("/agenda/event/:id/rsvp", async (c) => {
+  const email = await resolveAccessEmail(c, c.env);
+  const id = c.req.param("id");
+  if (!email) return c.redirect(`/agenda/event/${id}`);
+  const form = await c.req.formData();
+  const gaat = String(form.get("gaat") ?? "") === "ja";
+  const me = await getPlayerByEmail(c.env, email);
+  await zetRsvp(c.env, id, email, me?.naam ?? email, gaat).catch(() => { /* tabel mist (migratie 0006) */ });
+  return c.redirect(`/agenda/event/${id}`);
 });
 app.post("/agenda", async (c) => {
   if (!canEditAgenda(c.get("roles") ?? [])) return c.redirect("/agenda");
@@ -2412,6 +2616,9 @@ app.post("/vandaag", async (c) => {
     const me = medewerkerVoorEmail(email, await getMedewerkers(c.env));
     await zetStatus(c.env, email, me?.fields.Naam ? String(me.fields.Naam) : email, status === "" ? "" : status);
   }
+  // v204: vanaf home (one-tap-vraag) terug naar home; ?ok= laat de SW-cache
+  // overslaan zodat je de vraag direct ziet verdwijnen.
+  if (String(form.get("terug") ?? "") === "/") return c.redirect("/?ok=status");
   return c.redirect("/vandaag?ok=" + encodeURIComponent(status ? "Status doorgegeven" : "Status gewist"));
 });
 
@@ -2423,7 +2630,17 @@ app.post("/agenda/verlof/sync", async (c) => {
 app.post("/agenda/:id/delete", async (c) => {
   if (!canEditAgenda(c.get("roles") ?? [])) return c.redirect("/agenda");
   const form = await c.req.formData();
-  await deleteEvent(c.env, c.req.param("id"));
+  const eventId = c.req.param("id");
+  await deleteEvent(c.env, eventId);
+  // v203: cascade — notificaties van dit event bij ALLE ontvangers weg én uit de
+  // kennisbank-index (kbev_<id>), zodat de assistent het niet meer opduikt
+  // (melding PJ 12/6: "lollig" agendapunt bleef in notificaties + index hangen).
+  // NB: een al afgeleverde push op het toestel zelf is technisch niet terug te
+  // trekken; het notificatiecentrum en de index zijn wél direct schoon.
+  c.executionCtx.waitUntil((async () => {
+    try { await verwijderNotificatiesVoorUrl(c.env, `/agenda/event/${eventId}`); } catch { /* best effort */ }
+    try { await removeKbDoc(c.env, "kbev_" + eventId); } catch { /* best effort */ }
+  })());
   return c.redirect(`/agenda?view=${form.get("view") ?? "maand"}&date=${form.get("date") ?? ""}`);
 });
 
@@ -2912,6 +3129,13 @@ export default {
   fetch: app.fetch,
   // AVG: dagelijkse opschoning van oude bezoekmeldingen (opt-in via env).
   scheduled: async (_controller, env, ctx) => {
+    // v204: ochtendtriggers (06:15/07:15 UTC = 08:15 Amsterdam in zomer/winter,
+    // ma-vr) doen ALLEEN de statuspush; de nachttaken blijven bij de 03:00-run.
+    const cronExpr = (_controller as { cron?: string } | undefined)?.cron ?? "";
+    if (cronExpr === "15 6 * * 1-5" || cronExpr === "15 7 * * 1-5") {
+      ctx.waitUntil(ochtendStatusPush(env).catch((e) => console.error("Ochtend-statuspush faalde:", e)));
+      return;
+    }
     if (env.AVG_CLEANUP_ENABLED === "true") {
       const dagen = Number(env.RETENTIE_DAGEN ?? "90") || 90;
       ctx.waitUntil(

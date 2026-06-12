@@ -61,6 +61,9 @@ export interface Env {
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
   PUSH_API_KEY?: string;
+
+  // ---- AI-webzoek (v206): Tavily — alleen als secret in de secret-store ----
+  TAVILY_API_KEY?: string;
 }
 
 export interface AirtableRecord<T> {

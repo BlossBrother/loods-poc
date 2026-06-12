@@ -39,6 +39,32 @@ export async function gelezenDoor(env: Env, email: string): Promise<Set<string>>
   return new Set((r.results ?? []).map((x) => `${x.doel_type}:${x.doel_id}`));
 }
 
+// v194: passieve "gezien"-registratie (ghost-modus): de pagina openen telt als
+// gezien. Eigen doel_types ("nieuws_gezien"/"document_gezien") naast de expliciete
+// bevestigingen — zelfde tabel, zelfde idempotentie, geen schemawijziging.
+export async function registreerGezien(
+  env: Env,
+  doelType: LeesDoelType,
+  doelIds: string[],
+  email: string,
+  naam: string | null,
+): Promise<void> {
+  if (doelIds.length === 0) return;
+  const d = db(env);
+  const now = Date.now();
+  await d.batch(
+    doelIds.slice(0, 60).map((id) =>
+      d
+        .prepare(
+          `INSERT INTO leesbevestigingen (id, tenant_id, doel_type, doel_id, email, naam, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(tenant_id, doel_type, doel_id, email) DO NOTHING`,
+        )
+        .bind("lz" + crypto.randomUUID().replace(/-/g, ""), TENANT, `${doelType}_gezien`, id, email.toLowerCase(), naam, now),
+    ),
+  );
+}
+
 export interface LeesStat { aantal: number; namen: string[] }
 
 // Beheeroverzicht: per doel ("type:id") het aantal bevestigingen + de namen
