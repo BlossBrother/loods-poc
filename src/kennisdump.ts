@@ -62,7 +62,7 @@ export async function verwerkDump(env: Env, naam: string, bytes: ArrayBuffer, do
   // 3. AI-categorisatie: titel, categorie, samenvatting + klant-SUGGESTIE.
   let meta = { titel: naam.replace(/\.[a-z0-9]+$/i, ""), categorie: "overig", samenvatting: "", klant: false };
   try {
-    const res = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+    const res = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
       messages: [
         { role: "system", content: `Je krijgt een document van kwekerij Fresh Forward (aardbeien-/zachtfruitrassen). Antwoord ALLEEN met geldige JSON: {"titel":"korte nette titel","categorie":"een van: ${CATS.join("|")}","samenvatting":"één zin Nederlands","klant":true of false}. "klant" is true alléén als het document duidelijk voor klanten/telers bedoeld is (rasinformatie, teeltadvies, nieuwsbrief).` },
         { role: "user", content: md.slice(0, 6000) },
