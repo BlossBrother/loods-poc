@@ -690,7 +690,10 @@ export function layout(title: string, active: string, body: Body, roles: string[
       .hero .kicker{ font-size:.76rem; font-weight:680; letter-spacing:.05em; text-transform:uppercase; opacity:.85; }
       .hero h1{ color:#fff; font-size:1.62rem; margin:6px 0 5px; letter-spacing:-.03em; }
       .hero p{ margin:0; opacity:.92; font-size:.92rem; max-width:36ch; }
-      .appgrid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap:12px; margin:4px 0 6px; }
+      /* v208: min-kolombreedte 10rem -> 13.5rem — op desktop kromp een tegel tot
+         160px en braken titels mid-woord ("Pushmeldin g"); auto-fill houdt de
+         tegelbreedte consistent (geen uitgerekte laatste rij). */
+      .appgrid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(min(100%, 13.5rem), 1fr)); gap:12px; margin:4px 0 6px; }
       @media (max-width:430px){ .beheergrid{ grid-template-columns:1fr; } }
       .apptile{ display:flex; align-items:center; gap:13px; padding:15px 16px; border-radius:var(--radius); background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow); text-decoration:none; color:var(--ink); transition:transform .14s cubic-bezier(.2,.7,.3,1), box-shadow .16s; min-width:0; }
       .apptile:hover{ transform:translateY(-2px); box-shadow:var(--shadow-lg); }

@@ -9,7 +9,13 @@
 
 ---
 
-### v207 — Chips-rij alleen horizontaal scrollbaar  (PWA ff-v179)
+### v208 — Desktop-tegels schalen netjes  (PWA ff-v180)
+- Beheer-/app-tegels (appgrid) kropen op desktop naar 160px en braken titels
+  mid-woord ("Pushmeldin g", "Medewerke rs"). Min-kolombreedte naar 13.5rem en
+  auto-fit → auto-fill (consistente tegelbreedte, geen uitgerekte laatste rij).
+  Geldt voor alle appgrid-gebruikers (beheer-hub e.a.).
+
+### v207 — Chips-rij alleen horizontaal scrollbaar  (PWA ff-v179, meegeleverd in v208)
 - De header-chips op home waren ook verticaal sleepbaar (PJ): de onzichtbare
   44px-hit-area (::after, inset -6px) stak boven/onder de rij uit, en bij
   overflow-x:auto wordt overflow-y impliciet ook auto. Fix: verticale padding

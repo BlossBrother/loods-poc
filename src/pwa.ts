@@ -3,7 +3,7 @@ import { ICON_192_B64, ICON_512_B64, b64ToBytes } from "./icons";
 export const THEME = "#2f8b54";
 
 // Zichtbaar buildversie-label (footer/menu). Aflezen op toestel = welke versie laadt er echt.
-export const BUILD = "v207";
+export const BUILD = "v208";
 
 export const MANIFEST = {
   name: "Fresh Forward",
@@ -27,7 +27,7 @@ export const MANIFEST = {
 // - Na een actie (?ok=... na in-/uitchecken, posten, opslaan): altijd vers van
 //   het netwerk, zodat je je wijziging direct ziet.
 export const SERVICE_WORKER = `
-const CACHE = "ff-v179";
+const CACHE = "ff-v180";
 const WARM = ["/smoelenboek", "/competitie", "/social"];
 
 self.addEventListener("install", function () { self.skipWaiting(); });
