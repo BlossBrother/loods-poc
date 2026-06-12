@@ -5,7 +5,7 @@
 import type { Env } from "./airtable";
 
 const EMBED_MODEL = "@cf/baai/bge-base-en-v1.5"; // 768 dims — moet matchen met de index
-const GEN_MODEL = "@cf/meta/llama-3.1-8b-instruct";
+const GEN_MODEL = "@cf/zai-org/glm-4.7-flash";
 const TOP_K = 5;
 
 const SYSTEM = `Je bent de interne assistent van Fresh Forward. Beantwoord de vraag
