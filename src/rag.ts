@@ -222,6 +222,6 @@ export async function ask(env: Env, question: string, opts: { audiences?: string
     ? SYSTEM.replace("Antwoord in het Nederlands, bondig en praktisch.", `Antwoord in het ${opts.lang}, bondig en praktisch.`)
     : SYSTEM;
   const res = await env.AI!.run(GEN_MODEL, { messages: [{ role: "system", content: sys }, { role: "user", content: `Context:\n${context}\n\nVraag: ${question}` }] });
-  const answer = String((res as { response?: string }).response ?? "").trim() || "Geen antwoord beschikbaar.";
+  const answer = String((res as any).response ?? (res as any).choices?.[0]?.message?.content ?? "").trim() || "Geen antwoord beschikbaar.";
   return { answer, sources, answered: true };
 }
