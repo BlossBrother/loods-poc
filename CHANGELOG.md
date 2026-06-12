@@ -9,6 +9,33 @@
 
 ---
 
+### v210 — Security-hardening (Ronde 0) + beheerbare snelkoppelingen  (PWA ff-v182)
+**Security (deepcheck 12/6 — geen nieuwe migraties nodig):**
+- **Portaal-bestands-IDOR dicht** (§3.1): `/portaal/bestand` serveert nu alleen
+  sleutels die bij GEPUBLICEERDE portaal-content horen (klantdocumenten/rassen/
+  teeltadvies/snoei) via `portaalKeyToegestaan()` — voorkomt dat een ingelogde klant
+  interne of andermans bestanden ophaalt door een sleutel te raden. Faalt dicht.
+- **Portaal-afbeeldingen via `/portaal/bestand`** i.p.v. het interne `/bestand`
+  (`portalAsset()` in views/portal.ts): `/bestand` zit achter Access (alleen
+  /portaal* krijgt de bypass), dus content-afbeeldingen (rassen/teelt) zouden voor
+  externe klanten geblokkeerd zijn — nu lopen ze via de portaal-route mét allowlist.
+- **`/bestand` eist een interne identiteit** (§3.3, defense-in-depth) — geen serveren
+  meer zonder Access-identiteit.
+- **Key-entropie**: upload-sleutels gebruiken nu `crypto.randomUUID()` i.p.v. 6
+  base36-tekens (medewerkers/nieuws/docs/klantdocs).
+- **CSRF-hardening** (§3.4): nieuwe middleware weigert state-changing POSTs die
+  aantoonbaar cross-site zijn (Sec-Fetch-Site, met Origin-Host-terugval); server-naar-
+  server endpoints (PUSH_API_KEY) en GET/HEAD blijven ongemoeid.
+- **Open-redirect dicht** (§3.5): `veiligTerug()` valideert de `back`-parameter
+  (competitie) en de notificatie-`url` — alleen interne paden, geen `//evil`.
+
+**Beheerbare snelkoppelingen (Beheer → Snelkoppelingen, nieuw):** de app-tegels op
+home (Buddee, TimeChimp, WK-poule + eigen links) zijn nu beheerbaar zonder code/deploy:
+label, URL, icoon, aan/uit en volgorde, opgeslagen als JSON in `app_settings`
+(src/tiles.ts, zelfde patroon als header/modules). Standaard = exact de bestaande
+env-tiles, dus zonder config verandert er niets. Lost o.a. de "WK-poule verbergen na
+het WK"-klus op (uitvinken i.p.v. code wijzigen). URL-validatie: alleen https/intern pad.
+
 ### v209 — Livegang-klaar: welkomsttour v2 + demo-verlof eruit  (PWA ff-v181)
 - **Welkomsttour vernieuwd** (interne livegang volgende week): scrollbaar gemaakt
   (content > viewport werd afgekapt — melding PJ; body scrollt nu in een eigen

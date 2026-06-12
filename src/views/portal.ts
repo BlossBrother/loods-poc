@@ -12,6 +12,16 @@ import { BRAND_LOGO_B64 } from "../brand";
 
 type Body = HtmlEscapedString | Promise<HtmlEscapedString>;
 
+// Beveiliging (securityrapport §3.1/§3.3): interne afbeeldingen komen uit bijlage()
+// als /bestand?k=… , maar /bestand zit achter Cloudflare Access (alleen /portaal*
+// krijgt de bypass). Portaal-afbeeldingen moeten dus via /portaal/bestand (dat de
+// portaal-allowlist afdwingt) — anders blokkeert Access ze voor externe klanten.
+// Externe https-URL's blijven ongemoeid.
+function portalAsset(url?: string): string | undefined {
+  if (!url) return url;
+  return url.startsWith("/bestand?k=") ? "/portaal" + url : url;
+}
+
 // Eigen layout voor het klantenportaal — volledig los van het interne deel.
 // Alle interface-teksten komen uit `t` (meertalig).
 export function portalLayout(
@@ -239,7 +249,7 @@ export function portalRassen(t: Strings, rassen: AirtableRecord<RasFields>[]) {
             r.fields.Afbeelding?.[0]?.thumbnails?.large?.url ??
             r.fields.Afbeelding?.[0]?.url;
           return html`<article class="card">
-            ${img ? html`<img class="ras-img" src="${img}" alt="${r.fields.Naam ?? ""}" />` : ""}
+            ${img ? html`<img class="ras-img" src="${portalAsset(img)}" alt="${r.fields.Naam ?? ""}" />` : ""}
             ${r.fields.Bestandssleutel ? html`<p class="muted">Bijlage: <a href="/portaal/bestand?k=${encodeURIComponent(r.fields.Bestandssleutel)}">${r.fields.Bestandsnaam ?? "download"}</a></p>` : ""}
             <h3>${r.fields.Naam ?? "—"}</h3>
             <div>
@@ -270,7 +280,7 @@ export function portalTeeltadvies(
             const img =
               a.fields.Afbeelding?.[0]?.thumbnails?.large?.url ?? a.fields.Afbeelding?.[0]?.url;
             return html`<article class="card">
-            ${img ? html`<img class="ras-img" src="${img}" alt="${a.fields.Titel ?? ""}" />` : ""}
+            ${img ? html`<img class="ras-img" src="${portalAsset(img)}" alt="${a.fields.Titel ?? ""}" />` : ""}
             ${a.fields.Bestandssleutel ? html`<p class="muted">Bijlage: <a href="/portaal/bestand?k=${encodeURIComponent(a.fields.Bestandssleutel)}">${a.fields.Bestandsnaam ?? "download"}</a></p>` : ""}
             <h3>${a.fields.Titel ?? "—"}</h3>
             <div>
@@ -300,7 +310,7 @@ export function portalSnoeiPluk(
             const img =
               a.fields.Afbeelding?.[0]?.thumbnails?.large?.url ?? a.fields.Afbeelding?.[0]?.url;
             return html`<article class="card">
-            ${img ? html`<img class="ras-img" src="${img}" alt="${a.fields.Titel ?? ""}" />` : ""}
+            ${img ? html`<img class="ras-img" src="${portalAsset(img)}" alt="${a.fields.Titel ?? ""}" />` : ""}
             ${a.fields.Bestandssleutel ? html`<p class="muted">Bijlage: <a href="/portaal/bestand?k=${encodeURIComponent(a.fields.Bestandssleutel)}">${a.fields.Bestandsnaam ?? "download"}</a></p>` : ""}
             <h3>${a.fields.Titel ?? "—"}</h3>
             <div>
@@ -327,7 +337,7 @@ export function portalDocumenten(t: Strings, docs: AirtableRecord<KlantdocumentF
             const img =
               d.fields.Afbeelding?.[0]?.thumbnails?.large?.url ?? d.fields.Afbeelding?.[0]?.url;
             return html`<article class="card">
-            ${img ? html`<img class="ras-img" src="${img}" alt="${d.fields.Titel ?? ""}" />` : ""}
+            ${img ? html`<img class="ras-img" src="${portalAsset(img)}" alt="${d.fields.Titel ?? ""}" />` : ""}
             <h3>
               ${d.fields.Bestandssleutel
                 ? html`<a href="/portaal/bestand?k=${encodeURIComponent(d.fields.Bestandssleutel)}">${d.fields.Titel ?? "—"}</a>`

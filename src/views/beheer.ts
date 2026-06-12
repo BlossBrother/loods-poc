@@ -12,6 +12,7 @@ import type {
   KlantdocumentFields,
 } from "../airtable";
 import { PUSH_FEATURES } from "../modules";
+import { TILE_ICONS, type Tile } from "../tiles";
 import type { NavLayout } from "../nav";
 import { svg } from "./layout";
 import { eyebrow } from "./loods";
@@ -43,6 +44,7 @@ const BEHEER_GROEPEN: BeheerGroep[] = [
   { title: "Platform", tegels: [
     { href: "/beheer/modules", label: "Modules", desc: "Onderdelen aan/uit zetten", icon: "toggle" },
     { href: "/beheer/header", label: "Header & begroeting", desc: "Begroeting bovenaan home", icon: "news" },
+    { href: "/beheer/tiles", label: "Snelkoppelingen", desc: "App-tegels op home (Buddee, TimeChimp, WK…)", icon: "toggle" },
     { href: "/beheer/push", label: "Pushmelding", desc: "Stuur een melding naar collega's", icon: "bell" },
     { href: "/beheer/meldingen", label: "Meldingen-ontvangers", desc: "Wie krijgt de wekelijkse samenvatting", icon: "alert" },
     { href: "/beheer/bhv", label: "BHV-groep", desc: "Wie krijgt de noodmelding", icon: "sos" },
@@ -96,6 +98,80 @@ export function geenToegang() {
     <p class="muted">Deze pagina is alleen voor beheerders. Vraag een beheerder om je
       rol op "Beheerder" te zetten, of je e-mail toe te voegen aan de beheerderslijst.</p>
     <p><a href="/">← terug naar intranet</a></p>
+  `;
+}
+
+// Beheer → Snelkoppelingen: de app-tegels (chips) op home beheren zonder code/deploy.
+export function beheerTiles(tiles: Tile[], opts: { melding?: string } = {}) {
+  const data = JSON.stringify({ tiles, icons: TILE_ICONS }).replace(/</g, "\\u003c");
+  return html`
+    <h1>Snelkoppelingen</h1>
+    ${opts.melding ? html`<p class="ok flash" data-toast>${opts.melding}</p>` : ""}
+    <p class="muted">De app-tegels in de chip-rij bovenaan home (Buddee, TimeChimp,
+      WK-poule en eigen links). Sleep-volgorde = volgorde van tonen. Links moeten met
+      <code>https://</code> beginnen, of een intern pad (<code>/agenda</code>). Uitgevinkt = verborgen
+      (handig om bijv. de WK-poule na het toernooi weg te halen).</p>
+    <form method="post" action="/beheer/tiles" class="card" id="tform">
+      <div id="trows"></div>
+      <button type="button" id="tadd" class="btn btn-soft" style="margin-top:6px">+ Snelkoppeling toevoegen</button>
+      <input type="hidden" name="tiles" id="tjson" />
+      <div style="margin-top:16px">
+        <button type="submit">Opslaan</button>
+        <button type="submit" name="reset" value="1" class="btn btn-soft" style="margin-left:8px">Reset naar standaard</button>
+      </div>
+    </form>
+    <p class="muted"><a href="/beheer">&larr; beheer</a></p>
+
+    <script type="application/json" id="tdata">${raw(data)}</script>
+    <script>
+      (function () {
+        var init = { tiles: [], icons: [] };
+        try { init = JSON.parse(document.getElementById("tdata").textContent); } catch (e) {}
+        var rows = document.getElementById("trows");
+        var form = document.getElementById("tform");
+        function rowEl(t) {
+          var d = document.createElement("div");
+          d.className = "trow row"; d.style.cssText = "gap:8px;margin:6px 0;flex-wrap:wrap;align-items:center";
+          var optn = (init.icons || []).map(function (ic) {
+            return '<option value="' + ic + '"' + (t.icon === ic ? " selected" : "") + ">" + ic + "</option>";
+          }).join("");
+          d.innerHTML =
+            '<input class="t-label" type="text" maxlength="40" placeholder="Naam" style="flex:1 1 110px;margin:0" />' +
+            '<input class="t-url" type="text" maxlength="400" placeholder="https://… of /pad" style="flex:2 1 200px;margin:0" />' +
+            '<select class="t-icon" style="flex:0 0 auto;margin:0">' + optn + "</select>" +
+            '<label class="row" style="gap:5px;font-size:.82rem;margin:0"><input class="t-on" type="checkbox" /> aan</label>' +
+            '<button type="button" class="btn btn-soft t-up" title="Omhoog" style="margin:0;padding:6px 9px">↑</button>' +
+            '<button type="button" class="btn btn-soft t-del" title="Verwijderen" style="margin:0;padding:6px 10px">×</button>';
+          d.querySelector(".t-label").value = t.label || "";
+          d.querySelector(".t-url").value = t.url || "";
+          d.querySelector(".t-on").checked = t.enabled !== false;
+          d.querySelector(".t-del").addEventListener("click", function () { d.remove(); serialize(); });
+          d.querySelector(".t-up").addEventListener("click", function () {
+            if (d.previousElementSibling) rows.insertBefore(d, d.previousElementSibling);
+            serialize();
+          });
+          d.addEventListener("input", serialize);
+          d.addEventListener("change", serialize);
+          return d;
+        }
+        function collect() {
+          return Array.prototype.slice.call(rows.querySelectorAll(".trow")).map(function (d) {
+            return {
+              label: d.querySelector(".t-label").value.trim(),
+              url: d.querySelector(".t-url").value.trim(),
+              icon: d.querySelector(".t-icon").value,
+              enabled: d.querySelector(".t-on").checked,
+            };
+          }).filter(function (t) { return t.label && t.url; });
+        }
+        function serialize() { document.getElementById("tjson").value = JSON.stringify(collect()); }
+        (init.tiles || []).forEach(function (t) { rows.appendChild(rowEl(t)); });
+        if (!(init.tiles || []).length) rows.appendChild(rowEl({ icon: "link", enabled: true }));
+        serialize();
+        document.getElementById("tadd").addEventListener("click", function () { rows.appendChild(rowEl({ icon: "link", enabled: true })); serialize(); });
+        form.addEventListener("submit", serialize);
+      })();
+    </script>
   `;
 }
 

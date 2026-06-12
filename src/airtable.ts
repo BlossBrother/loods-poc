@@ -678,6 +678,29 @@ export async function getKlantdocumenten(env: Env): Promise<AirtableRecord<Klant
   }));
 }
 
+// Beveiliging (securityrapport §3.1): mag deze R2-sleutel via het klantenportaal
+// geserveerd worden? Alleen sleutels die bij GEPUBLICEERDE portaal-content horen
+// (klantdocumenten, rassen, teeltadvies, snoei-pluk) — nooit interne bestanden
+// (medewerkersfoto's, interne documenten, nieuws-afbeeldingen). Faalt dicht: bij
+// twijfel of een ontbrekende tabel/kolom -> false (geen toegang).
+export async function portaalKeyToegestaan(env: Env, key: string): Promise<boolean> {
+  if (!env.DB || !key) return false;
+  try {
+    const row = await env.DB.prepare(
+      `SELECT 1 AS ok FROM klantdocumenten WHERE gepubliceerd=1 AND (bestandssleutel=?1 OR afbeelding_key=?1)
+       UNION SELECT 1 FROM rassen        WHERE gepubliceerd=1 AND (bestandssleutel=?1 OR afbeelding_key=?1)
+       UNION SELECT 1 FROM teeltadvies   WHERE gepubliceerd=1 AND (bestandssleutel=?1 OR afbeelding_key=?1)
+       UNION SELECT 1 FROM snoei_pluk    WHERE gepubliceerd=1 AND (bestandssleutel=?1 OR afbeelding_key=?1)
+       LIMIT 1`,
+    )
+      .bind(key)
+      .first<{ ok: number }>();
+    return !!row;
+  } catch {
+    return false;
+  }
+}
+
 /* ===================== Web-push abonnementen ===================== */
 
 export interface PushAbonnementFields {

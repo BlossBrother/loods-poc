@@ -35,8 +35,10 @@ import {
   beheerLeesbevestiging,
   beheerKennisdump,
   beheerAnalytics,
+  beheerTiles,
   type LeesItem,
 } from "./views/beheer";
+import { getTiles, saveTiles, resetTiles } from "./tiles";
 import { bevestigGelezen, gelezenDoor, leesOverzicht, registreerGezien } from "./leesbevestiging";
 import { syncAccessUitzendkrachten, accessSyncGeconfigureerd } from "./accesssync";
 import { zetStatus, wieIsErVandaag, opschoonAanwezigheid, isAanwStatus } from "./aanwezigheid";
@@ -121,6 +123,7 @@ import {
   getTeeltadvies,
   getSnoeiPluk,
   getKlantdocumenten,
+  portaalKeyToegestaan,
   getAlleRassen,
   getAlleTeeltadvies,
   getAlleSnoeiPluk,
@@ -224,6 +227,34 @@ app.use("*", async (c, next) => {
 
 app.use("*", securityHeaders);
 
+// CSRF-hardening (securityrapport §3.4): weiger state-changing verzoeken die
+// aantoonbaar van een andere site komen. Moderne browsers sturen Sec-Fetch-Site;
+// we laten same-origin/same-site/none door en blokkeren "cross-site". Ontbreekt
+// die header, dan vergelijken we de Origin-host met de eigen host. Server-naar-
+// server endpoints (geauthenticeerd via PUSH_API_KEY) en veilige methoden (GET/
+// HEAD/OPTIONS) blijven ongemoeid.
+const CSRF_SKIP = new Set(["/api/push", "/api/bezoek-melding"]);
+app.use("*", async (c, next) => {
+  const m = c.req.method;
+  if (m === "GET" || m === "HEAD" || m === "OPTIONS") return next();
+  if (CSRF_SKIP.has(c.req.path)) return next();
+  const sfs = c.req.header("sec-fetch-site");
+  if (sfs) {
+    if (sfs === "cross-site") return c.text("Cross-site verzoek geweigerd", 403);
+    return next();
+  }
+  const origin = c.req.header("origin");
+  if (origin) {
+    try {
+      const host = c.req.header("host") ?? new URL(c.req.url).host;
+      if (new URL(origin).host !== host) return c.text("Cross-site verzoek geweigerd", 403);
+    } catch {
+      return c.text("Ongeldige origin", 403);
+    }
+  }
+  return next();
+});
+
 // Server-side module-guard: een uitgeschakelde module is ook op URL/API onbereikbaar,
 // niet alleen verborgen in het menu. Pad-prefix -> module-id. Beheer blijft admin-gated.
 const PAD_MODULE: [string, string][] = [
@@ -263,6 +294,14 @@ app.route("/crm", crmRoutes);
 // Identiteit & beheerdersrechten van het INTERNE deel komen uit ./access
 // (Cloudflare Access-JWT of -header; niet meer fail-open). Hier alleen nog een
 // kleine helper voor de auteurslijsten.
+// Veilige interne redirect (securityrapport §3.5): laat alleen een pad binnen de
+// eigen site toe. Weert open-redirects (`https://evil`) én protocol-relatieve
+// URL's (`//evil`, begint óók met "/"). Anders de fallback.
+function veiligTerug(back: string | undefined | null, fallback: string): string {
+  const b = String(back ?? "");
+  return b.startsWith("/") && !b.startsWith("//") ? b : fallback;
+}
+
 function actieveAuteurs(medewerkers: AirtableRecord<MedewerkerFields>[]) {
   return medewerkers
     .filter((m) => m.fields.Actief !== false)
@@ -499,9 +538,14 @@ function bestandResponse(obj: R2ObjectBody, key: string): Response {
 }
 
 // Download van een intern geupload document uit R2 (achter Cloudflare Access).
+// Defense-in-depth (securityrapport §3.3): /bestand zit achter Access (alleen
+// /portaal* heeft de bypass), maar we eisen hier expliciet een interne identiteit
+// zodat een verzoek zónder Access-identiteit nooit een sleutel kan ophalen.
+// Portaal-afbeeldingen lopen bewust via /portaal/bestand (eigen allowlist), niet hier.
 app.get("/bestand", async (c) => {
   const key = c.req.query("k");
   if (!key || !c.env.DOCS) return c.notFound();
+  if (!isDev(c.env) && !(await resolveAccessEmail(c, c.env))) return c.notFound();
   const obj = await c.env.DOCS.get(key);
   if (!obj) return c.notFound();
   return bestandResponse(obj, key);
@@ -629,9 +673,17 @@ app.get("/", async (c) => {
   // v205 (PJ): aanwezigheid als chip bovenin (teller = afwezigen) i.p.v. rij in de
   // vandaag-kaart; WK-poule verdwijnt hier na het WK weer.
   if (enabledForYou.has("team")) chips.push({ label: "Vandaag", count: afwezig?.aantal ?? 0, route: "/vandaag", icon: "users" });
-  chips.push({ label: "WK-poule", count: 0, route: apps.wkPoule, icon: "ball" });
-  chips.push({ label: "Buddee", count: 0, route: apps.buddee, icon: "users" });
-  chips.push({ label: "TimeChimp", count: 0, route: apps.timechimp, icon: "clock" });
+  // App-snelkoppelingen (beheerbaar via Beheer → Snelkoppelingen; standaard = de
+  // env-tiles WK-poule/Buddee/TimeChimp, dus ongewijzigd zonder config).
+  try {
+    for (const tl of await getTiles(c.env)) {
+      if (tl.enabled) chips.push({ label: tl.label, count: 0, route: tl.url, icon: tl.icon });
+    }
+  } catch {
+    chips.push({ label: "WK-poule", count: 0, route: apps.wkPoule, icon: "ball" });
+    chips.push({ label: "Buddee", count: 0, route: apps.buddee, icon: "users" });
+    chips.push({ label: "TimeChimp", count: 0, route: apps.timechimp, icon: "clock" });
+  }
   const voorJou = fy.groups.flatMap((g) => g.items.map((it) => ({ titel: it.title, sub: it.subtitle, route: it.route, icon: CHIP_ICON[g.moduleKey] ?? "file", cta: "Bekijk" }))).slice(0, 4);
   if ((c.get("roles") ?? []).includes("crm")) {
     try {
@@ -1139,7 +1191,7 @@ app.post("/competitie/match", async (c) => {
   const tid = String(form.get("tournament_id") ?? "") || null;
   await recordMatch(c.env, game, a, b, winner, sa, sb, tid, idemId(form.get("idem"), "m"));
   const back = String(form.get("back") ?? "");
-  return c.redirect(back || `/competitie?game=${game}`);
+  return c.redirect(veiligTerug(back, `/competitie?game=${game}`));
 });
 
 // Corrigeer de laatst ingevoerde pot (verkeerd ingevuld): zet de ELO exact terug.
@@ -1584,8 +1636,7 @@ app.get("/notificaties/open/:id", async (c) => {
   const n = await getNotificatie(c.env, email, c.req.param("id"));
   if (!n) return c.redirect("/notificaties");
   await markRead(c.env, email, n.id);
-  const url = n.url && n.url.startsWith("/") ? n.url : "/notificaties";
-  return c.redirect(url);
+  return c.redirect(veiligTerug(n.url, "/notificaties"));
 });
 
 app.post("/notificaties/gelezen", async (c) => {
@@ -2026,7 +2077,7 @@ app.post("/beheer/medewerkers", async (c) => {
   const fotoFile = form.get("foto") as unknown as File | null;
   if (fotoFile && fotoFile.size > 0 && c.env.DOCS) {
     const veilig = fotoFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const sleutel = `medewerkers/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${veilig}`;
+    const sleutel = `medewerkers/${Date.now()}-${crypto.randomUUID()}-${veilig}`;
     await c.env.DOCS.put(sleutel, fotoFile.stream(), {
       httpMetadata: { contentType: fotoFile.type || "image/jpeg" },
       customMetadata: { naam: fotoFile.name },
@@ -2116,7 +2167,7 @@ app.post("/beheer/nieuws", async (c) => {
   const foto = form.get("afbeelding") as unknown as File | null;
   if (foto && foto.size > 0 && c.env.DOCS) {
     const veilig = foto.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const sleutel = `nieuws/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${veilig}`;
+    const sleutel = `nieuws/${Date.now()}-${crypto.randomUUID()}-${veilig}`;
     await c.env.DOCS.put(sleutel, foto.stream(), {
       httpMetadata: { contentType: foto.type || "image/jpeg" },
       customMetadata: { naam: foto.name },
@@ -2184,7 +2235,7 @@ app.post("/beheer/documenten", async (c) => {
   const bestand = form.get("bestand") as unknown as File | null;
   if (bestand && bestand.size > 0) {
     const veilig = bestand.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const sleutel = `docs/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${veilig}`;
+    const sleutel = `docs/${Date.now()}-${crypto.randomUUID()}-${veilig}`;
     if (c.env.DOCS) {
       await c.env.DOCS.put(sleutel, bestand.stream(), {
         httpMetadata: { contentType: bestand.type || "application/octet-stream" },
@@ -2270,6 +2321,27 @@ app.post("/beheer/klanten/link", async (c) => {
   return c.html(
     layout("Klanten", "/", beheerKlanten(klanten, undefined, { link, linkEmail: email, fout }), c.get("roles") ?? []),
   );
+});
+
+// ---- Beheer: Snelkoppelingen (app-tegels op home) ----
+app.get("/beheer/tiles", async (c) => {
+  const medewerkers = await getMedewerkers(c.env);
+  if (!(await magBeheren(c, medewerkers))) return c.html(layout("Geen toegang", "/", geenToegang(), c.get("roles") ?? []), 403);
+  const tiles = await getTiles(c.env);
+  const melding = c.req.query("ok") === "reset" ? "Hersteld naar standaard." : c.req.query("ok") ? "Opgeslagen." : undefined;
+  return c.html(layout("Snelkoppelingen", "/", beheerTiles(tiles, { melding }), c.get("roles") ?? []));
+});
+
+app.post("/beheer/tiles", async (c) => {
+  const medewerkers = await getMedewerkers(c.env);
+  if (!(await magBeheren(c, medewerkers))) return c.html(layout("Geen toegang", "/", geenToegang(), c.get("roles") ?? []), 403);
+  const form = await c.req.formData();
+  if (form.get("reset")) { await resetTiles(c.env); return c.redirect("/beheer/tiles?ok=reset"); }
+  let tiles: unknown = [];
+  try { tiles = JSON.parse(String(form.get("tiles") ?? "[]")); } catch { tiles = []; }
+  await saveTiles(c.env, tiles);
+  await logAudit(c.env, await resolveAccessEmail(c, c.env), "update", "snelkoppelingen", "tiles");
+  return c.redirect("/beheer/tiles?ok=1");
 });
 
 // ---- Beheer: Header & begroeting ----
@@ -2481,7 +2553,7 @@ app.post("/beheer/klantdocumenten", async (c) => {
   const bestand = form.get("bestand") as unknown as File | null;
   if (bestand && bestand.size > 0 && c.env.DOCS) {
     const veilig = bestand.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const sleutel = `klantdocs/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${veilig}`;
+    const sleutel = `klantdocs/${Date.now()}-${crypto.randomUUID()}-${veilig}`;
     await c.env.DOCS.put(sleutel, bestand.stream(), {
       httpMetadata: { contentType: bestand.type || "application/octet-stream" },
       customMetadata: { naam: bestand.name },
@@ -3107,11 +3179,15 @@ app.get("/portaal/documenten", async (c) => {
   );
 });
 
-// Document-download voor klanten - alleen met geldige portaal-sessie.
+// Document-download/afbeeldingen voor klanten - alleen met geldige portaal-sessie
+// ÉN alleen sleutels die bij gepubliceerde portaal-content horen (securityrapport
+// §3.1): voorkomt dat een ingelogde klant interne of andermans bestanden ophaalt
+// door een sleutel te raden.
 app.get("/portaal/bestand", async (c) => {
   if (!(await eisPortal(c))) return c.redirect("/portaal/login");
   const key = c.req.query("k");
   if (!key || !c.env.DOCS) return c.notFound();
+  if (!(await portaalKeyToegestaan(c.env, key))) return c.notFound();
   const obj = await c.env.DOCS.get(key);
   if (!obj) return c.notFound();
   return bestandResponse(obj, key);
