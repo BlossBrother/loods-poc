@@ -68,7 +68,7 @@ export async function verwerkDump(env: Env, naam: string, bytes: ArrayBuffer, do
         { role: "user", content: md.slice(0, 6000) },
       ],
     });
-    const txt = String((res as { response?: string }).response ?? "");
+    const txt = String((res as any).response ?? (res as any).choices?.[0]?.message?.content ?? "");
     const j = JSON.parse(txt.slice(txt.indexOf("{"), txt.lastIndexOf("}") + 1)) as { titel?: string; categorie?: string; samenvatting?: string; klant?: boolean };
     meta = {
       titel: String(j.titel || meta.titel).slice(0, 140),
