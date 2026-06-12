@@ -1103,28 +1103,36 @@ export function layout(title: string, active: string, body: Body, roles: string[
     </section>`)}
     ${bottomNav(active, roles)}${fab(active)}
     <footer>Intern platform · ingelogd via Cloudflare Access · <a href="/bug">Bug melden</a> · <span class="buildtag">${BUILD}</span></footer>
-    <div id="ff-tour" role="dialog" aria-modal="true" aria-labelledby="ff-tour-title" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.45);align-items:center;justify-content:center;padding:20px">
-      <div style="background:var(--surface);color:var(--ink);max-width:430px;width:100%;border-radius:18px;padding:22px 22px 20px;box-shadow:0 20px 60px rgba(0,0,0,.32)">
-        <h2 id="ff-tour-title" style="margin:0 0 4px">Welkom op het intranet</h2>
-        <p class="muted" style="margin:0 0 14px">Een paar dingen om snel op weg te zijn:</p>
-        <ul class="clean" style="display:grid;gap:11px;margin:0 0 18px">
-          <li class="row-top" style="gap:11px"><span style="color:var(--green);flex:none">${svg("menu")}</span><span><strong>Navigatie</strong> — je kernmodules staan vast in de balk onderin; tik rechtsonder op <strong>Meer</strong> voor de rest.</span></li>
-          <li class="row-top" style="gap:11px"><span style="color:var(--green);flex:none">${svg("search")}</span><span><strong>Zoeken</strong> — met het vergrootglas rechtsboven zoek je in nieuws, documenten en collega's.</span></li>
-          <li class="row-top" style="gap:11px"><span style="color:var(--green);flex:none">${svg("refresh")}</span><span><strong>Gebaren</strong> — veeg vanaf de linkerrand om terug te gaan, veeg een item naar links voor snelle acties, en trek omlaag om te verversen.</span></li>
-          <li class="row-top" style="gap:11px"><span style="color:var(--green);flex:none">${svg("home")}</span><span><strong>Installeren</strong> — voeg de app toe aan je beginscherm voor snelle toegang.</span></li>
-          <li class="row-top" style="gap:11px"><span style="color:var(--green);flex:none">${svg("bug")}</span><span><strong>Feedback</strong> — via <strong>Meer → Bug melden</strong> geef je een bug of idee door.</span></li>
-        </ul>
-        <button id="ff-tour-ok" class="btn" style="width:100%;margin:0">Aan de slag</button>
+    ${/* v209: welkomsttour vernieuwd voor de interne livegang — scrollbaar (was
+         op kleine schermen afgekapt, melding PJ), inhoud bijgewerkt (assistent,
+         ochtendvraag, RSVP) en key v1->v2 zodat iedereen 'm één keer opnieuw ziet. */ ""}
+    <div id="ff-tour" role="dialog" aria-modal="true" aria-labelledby="ff-tour-title" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.45);align-items:center;justify-content:center;padding:max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom))">
+      <div style="background:var(--surface);color:var(--ink);max-width:430px;width:100%;border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,.32);display:flex;flex-direction:column;max-height:calc(100dvh - 40px);overflow:hidden">
+        <div style="overflow-y:auto;overscroll-behavior:contain;padding:22px 22px 6px">
+          <h2 id="ff-tour-title" style="margin:0 0 4px">Welkom op ons nieuwe intranet</h2>
+          <p class="muted" style="margin:0 0 14px">In één minuut op weg:</p>
+          <ul class="clean" style="display:grid;gap:11px;margin:0 0 16px">
+            <li class="row-top" style="gap:11px"><span style="color:var(--green);flex:none">${svg("menu")}</span><span><strong>Navigatie</strong> — je vaste onderdelen staan in de balk onderin; tik op <strong>Meer</strong> voor de rest.</span></li>
+            <li class="row-top" style="gap:11px"><span style="color:var(--green);flex:none">${raw('<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.8 8.7 19 10.5 13.8 12.3 12 17.5 10.2 12.3 5 10.5 10.2 8.7Z"/></svg>')}</span><span><strong>Assistent</strong> — de ster linksboven. Zoek iets ("verlofbeleid") of stel een vraag; je krijgt antwoord uit onze eigen kennisbank of van het web, mét bronnen.</span></li>
+            <li class="row-top" style="gap:11px"><span style="color:var(--green);flex:none">${svg("users")}</span><span><strong>Waar werk je vandaag?</strong> — beantwoord 's ochtends de vraag op home met één tik (kantoor/thuis/op pad). Zo weet iedereen wie waar is; via de <strong>Vandaag</strong>-chip zie je wie er afwezig is.</span></li>
+            <li class="row-top" style="gap:11px"><span style="color:var(--green);flex:none">${svg("refresh")}</span><span><strong>Gebaren</strong> — veeg vanaf de linkerrand terug, veeg items naar links voor acties, trek omlaag om te verversen.</span></li>
+            <li class="row-top" style="gap:11px"><span style="color:var(--green);flex:none">${svg("home")}</span><span><strong>Meldingen & beginscherm</strong> — zet meldingen aan via het kaartje op home en voeg de app toe aan je beginscherm. Voorkeuren per onderwerp regel je onder Notificaties.</span></li>
+            <li class="row-top" style="gap:11px"><span style="color:var(--green);flex:none">${svg("bug")}</span><span><strong>Zie je iets geks?</strong> — we zijn net live: meld bugs of ideeën via <strong>Meer → Feedback</strong>. Alles is welkom!</span></li>
+          </ul>
+        </div>
+        <div style="padding:10px 22px calc(16px + env(safe-area-inset-bottom));flex:none;border-top:1px solid var(--line)">
+          <button id="ff-tour-ok" class="btn" style="width:100%;margin:0">Aan de slag</button>
+        </div>
       </div>
     </div>
     <script>
       (function () {
         try {
-          if (localStorage.getItem("ff_tour_v1")) return;
+          if (localStorage.getItem("ff_tour_v2")) return;
           var el = document.getElementById("ff-tour");
           if (!el) return;
           el.style.display = "flex";
-          function done() { try { localStorage.setItem("ff_tour_v1", "1"); } catch (e) {} el.style.display = "none"; }
+          function done() { try { localStorage.setItem("ff_tour_v2", "1"); } catch (e) {} el.style.display = "none"; }
           var ok = document.getElementById("ff-tour-ok");
           if (ok) ok.addEventListener("click", done);
           el.addEventListener("click", function (e) { if (e.target === el) done(); });

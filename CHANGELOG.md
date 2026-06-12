@@ -9,7 +9,22 @@
 
 ---
 
-### v208 — Desktop-tegels schalen netjes  (PWA ff-v180)
+### v209 — Livegang-klaar: welkomsttour v2 + demo-verlof eruit  (PWA ff-v181)
+- **Welkomsttour vernieuwd** (interne livegang volgende week): scrollbaar gemaakt
+  (content > viewport werd afgekapt — melding PJ; body scrollt nu in een eigen
+  laag, knop vast onderin, safe-areas), inhoud geactualiseerd (assistent,
+  ochtendvraag/Vandaag-chip, meldingen, "we zijn net live — meld bugs!") en
+  localStorage-key v1→v2 zodat iedereen 'm bij de livegang één keer opnieuw ziet.
+- **Demo-verlofdata eruit** (PJ; Buddee-API volgt later): migratie
+  0022_verwijder_demo_verlof.sql — `DELETE FROM verlof WHERE source != 'buddee'`.
+  /vandaag + Vandaag-chip tonen tot de koppeling dus geen (neppe) afwezigen.
+- **Migratie-nummering gerepareerd**: mijn 0005/0006 botsten met bestaande
+  bestanden (map liep al t/m 0019) → hernummerd naar **0020_kennisdump.sql** en
+  **0021_event_rsvp.sql** (idempotent; oude bestanden zijn redirect-comments).
+  Draaien: `npx wrangler d1 execute fresh-forward-db --remote --file=migrations/00NN_….sql`
+  voor 0020, 0021 en 0022.
+
+### v208 — Desktop-tegels schalen netjes  (PWA ff-v180, meegeleverd in v209)
 - Beheer-/app-tegels (appgrid) kropen op desktop naar 160px en braken titels
   mid-woord ("Pushmeldin g", "Medewerke rs"). Min-kolombreedte naar 13.5rem en
   auto-fit → auto-fill (consistente tegelbreedte, geen uitgerekte laatste rij).
