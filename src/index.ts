@@ -1583,35 +1583,43 @@ app.post("/api/assist-stream", async (c) => {
         try { controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); } catch { /* gesloten */ }
       };
       try {
-        if (!besluit || !c.env.AI) {
+        if (!besluit) {
           send("meta", { treffers, mode: undefined, sources: [] });
           send("done", {});
           return;
         }
         send("meta", { treffers, mode: besluit.mode, sources: besluit.sources });
-        let full = "";
-        const aiStream = (await c.env.AI!.run(GEN_MODEL, { messages: besluit.messages, stream: true, max_tokens: 300 })) as unknown as ReadableStream<Uint8Array>;
-        const reader = aiStream.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          let nl: number;
-          while ((nl = buf.indexOf("\n")) >= 0) {
-            const line = buf.slice(0, nl).trim();
-            buf = buf.slice(nl + 1);
-            if (!line.startsWith("data:")) continue;
-            const payload = line.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
-            try {
-              const delta = leesDelta(JSON.parse(payload));
-              if (delta) { full += delta; send("delta", { t: delta }); }
-            } catch { /* niet-JSON keep-alive regel */ }
+        if (besluit.answer != null) {
+          // Kennisbank: al gegenereerd én goedgekeurd (weigering-doorval zit in beslisBron) -> direct tonen.
+          if (besluit.answer) send("delta", { t: besluit.answer });
+          send("done", { mode: besluit.mode });
+        } else if (besluit.messages && c.env.AI) {
+          // Web/algemeen: stream de generatie token-voor-token.
+          const aiStream = (await c.env.AI!.run(GEN_MODEL, { messages: besluit.messages, stream: true, max_tokens: 300 })) as unknown as ReadableStream<Uint8Array>;
+          const reader = aiStream.getReader();
+          const dec = new TextDecoder();
+          let buf = "";
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            let nl: number;
+            while ((nl = buf.indexOf("\n")) >= 0) {
+              const line = buf.slice(0, nl).trim();
+              buf = buf.slice(nl + 1);
+              if (!line.startsWith("data:")) continue;
+              const payload = line.slice(5).trim();
+              if (!payload || payload === "[DONE]") continue;
+              try {
+                const delta = leesDelta(JSON.parse(payload));
+                if (delta) send("delta", { t: delta });
+              } catch { /* niet-JSON keep-alive regel */ }
+            }
           }
+          send("done", { mode: besluit.mode });
+        } else {
+          send("done", { mode: besluit.mode });
         }
-        send("done", { mode: besluit.mode });
         c.executionCtx.waitUntil((async () => {
           try {
             if (c.env.DB) await c.env.DB.prepare("INSERT INTO ask_log (id, user_ref, question, answered, source_ids, created_at) VALUES (?, ?, ?, ?, ?, ?)")

@@ -295,44 +295,31 @@ export async function ask(env: Env, question: string, opts: { audiences?: string
   return { answer, sources, answered: true };
 }
 
-// Streaming-ondersteuning (taak 6): bepaal de bron (kennisbank -> web -> algemeen)
-// uit retrieval-signalen ZONDER te genereren, en geef de messages terug die de
-// route vervolgens streamend aan het model voert. Zo vuurt normaliter één generatie
-// (taak 5/10) en zijn label + bronnen al bekend vóór het eerste token.
+// Streaming-ondersteuning (taak 6): voer DEZELFDE cascade als v1.0 uit — kennisbank
+// (mét weigering-doorval) -> web -> algemeen — en geef terug wat de route moet doen:
+//  - `answer` gezet  -> kennisbank-antwoord is al gegenereerd én goedgekeurd (niet streamen).
+//  - `messages` gezet -> web/algemeen: de route streamt deze generatie token-voor-token.
+// Cruciaal: de kennisbank-stap genereert hier daadwerkelijk en checkt op weigering via
+// ask(); een leeg/weigerend kennisbank-antwoord valt door naar web en dan algemeen
+// (zónder dat moest de gebruiker een "ik kan dit niet vinden" zien i.p.v. een webantwoord).
 export interface BronBesluit {
   mode: "kennisbank" | "web" | "algemeen";
   sources: AskResult["sources"];
-  messages: { role: "system" | "user"; content: string }[];
+  answer?: string;
+  messages?: { role: "system" | "user"; content: string }[];
 }
 
 export async function beslisBron(env: Env, question: string, opts: { audiences?: string[]; lang?: string } = {}): Promise<BronBesluit> {
-  // 1. Kennisbank (RAG-retrieval).
+  // 1. Kennisbank: volledige RAG-stap (retrieval + generatie + weigering-check) via ask().
   if (ragActief(env)) {
     try {
-      const emb = await env.AI!.run(EMBED_MODEL, { text: [question] });
-      const qvec = (emb as { data: number[][] }).data[0];
-      const allowed = opts.audiences ?? ["public", "internal"];
-      const matches = await env.VECTORIZE!.query(qvec, { topK: TOP_K, returnMetadata: "all", filter: { audience: { $in: allowed } } });
-      const hits = (matches.matches ?? []).filter((m) => m.score >= 0.3 && allowed.includes(String((m.metadata as any)?.audience ?? "")));
-      if (hits.length) {
-        const ids = hits.map((m) => m.id);
-        const ph = ids.map((_, i) => `?${i + 1}`).join(",");
-        const rows = await db(env).prepare(`SELECT id, text FROM kb_chunks WHERE id IN (${ph})`).bind(...ids).all<{ id: string; text: string }>();
-        const textById = new Map((rows.results ?? []).map((r) => [r.id, r.text]));
-        const context = hits.map((m, i) => `[${i + 1}] ${textById.get(m.id) ?? ""}`).join("\n\n");
-        const seen = new Set<string>();
-        const sources = hits.map((m) => m.metadata).filter((md) => md && !seen.has(md.doc_id) && seen.add(md.doc_id))
-          .map((md) => ({ title: String(md.title ?? "bron"), url: md.url || undefined, category: md.category || undefined }));
-        const sys = opts.lang && !/nederlands|^nl$/i.test(opts.lang)
-          ? SYSTEM.replace("Antwoord in het Nederlands, bondig en praktisch.", `Antwoord in het ${opts.lang}, bondig en praktisch.`)
-          : SYSTEM;
-        return { mode: "kennisbank", sources, messages: [{ role: "system", content: sys }, { role: "user", content: `Context:\n${context}\n\nVraag: ${question}` }] };
-      }
+      const kb = await ask(env, question, opts);
+      if (kb.answered) return { mode: "kennisbank", sources: kb.sources, answer: kb.answer };
     } catch (e) {
       console.error("ai:beslisBron:kb", e);
     }
   }
-  // 2. Web (Tavily) — retrieval-only, daarna streamend samengevat.
+  // 2. Web (Tavily) — alleen als de kennisbank het niet wist (geen verspilde credits).
   const web = await webContext(env, question);
   if (web) {
     return { mode: "web", sources: web.sources, messages: [{ role: "system", content: WEB_SYS }, { role: "user", content: `Webfragmenten:\n${web.ctx}\n\nVraag: ${question}` }] };

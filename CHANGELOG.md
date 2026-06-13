@@ -9,6 +9,18 @@
 
 ---
 
+### v214 — Hotfix: streaming-assistent viel niet door van kennisbank naar web/algemeen  (PWA ff-v186)
+- Symptoom (PJ): "Hoeveel mensen wonen er in Arnhem?" gaf "UIT DE KENNISBANK — ik kan
+  dit niet vinden" i.p.v. een Tavily/algemeen-antwoord (v1.0 deed dat wél).
+- Oorzaak: in de v212-streamingroute koos `beslisBron` de bron puur op retrieval-hits.
+  De vector-zoek matcht met drempel 0.3 bijna altijd íets (losse chunks), dus mode werd
+  "kennisbank", het 70B-model weigerde correct ("niet in de context"), maar er was geen
+  doorval meer naar web/algemeen — die zat alleen in het oude (niet-streaming) `/api/assist`.
+- Fix: `beslisBron` voert nu dezelfde cascade als v1.0 — kennisbank via `ask()` (mét
+  weigering-doorval), dán web (Tavily), dán algemeen. Kennisbank-antwoorden komen
+  gebufferd terug (al goedgekeurd), web/algemeen streamen token-voor-token. De route
+  stuurt een gebufferd kennisbank-antwoord als één blok, en streamt alleen web/algemeen.
+
 ### v213 — Hotfix: assistent-knop werkte niet (syntaxfout in inline script)  (PWA ff-v185)
 - De streaming-client-JS uit v212 staat als string in een template-literal in
   `layout.ts`; daardoor werd elke geschreven `\n` door TS omgezet naar een ECHTE
