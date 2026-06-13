@@ -9,6 +9,15 @@
 
 ---
 
+### v213 — Hotfix: assistent-knop werkte niet (syntaxfout in inline script)  (PWA ff-v185)
+- De streaming-client-JS uit v212 staat als string in een template-literal in
+  `layout.ts`; daardoor werd elke geschreven `\n` door TS omgezet naar een ECHTE
+  regelovergang in de uitgestuurde JS → een regex/string-literal over twee regels →
+  **SyntaxError → het hele assistent-script (incl. de sparkle-openknop) deed niets**.
+  tsc ziet dit niet (het zit in een string). Fix: `\n` → `\\n` op vier plekken
+  (`indexOf("\\n\\n")`, `split("\\n")`, 2× `replace(/\\n/g,"<br>")`). De server-SSE in
+  index.ts gebruikt terecht echte newlines (geen template-literal-string).
+
 ### v212 — AI-assistent: modelwissel-nazorg + streaming + 70B + dart/UX-fixes  (PWA ff-v184)
 > **LET OP (geverifieerd 13/6):** de "vanavond al gedane" modelwissel stond NIET in
 > deze repo — `rag.ts`/`kennisdump.ts` hadden nog het uitgefaseerde

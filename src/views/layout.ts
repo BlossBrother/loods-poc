@@ -1216,7 +1216,7 @@ export function layout(title: string, active: string, body: Body, roles: string[
         // Niet-streaming terugval (oude /api/assist): rendert het volledige JSON-antwoord.
         function renderJson(wait, d) {
           var out = "";
-          if (d.answer) out += tagHtml(d.mode) + esc(d.answer).replace(/\n/g, "<br>") + srcHtml(d.sources);
+          if (d.answer) out += tagHtml(d.mode) + esc(d.answer).replace(/\\n/g, "<br>") + srcHtml(d.sources);
           out += trefHtml(d.treffers, !!d.answer);
           if (!out) out = esc("Niets gevonden — probeer andere woorden, of stel het als vraag.");
           wait.innerHTML = out; body.scrollTop = body.scrollHeight; saveChat();
@@ -1234,7 +1234,7 @@ export function layout(title: string, active: string, body: Body, roles: string[
               function render() {
                 var out = "";
                 if (full || (meta && meta.mode)) out += tagHtml(meta && meta.mode);
-                out += esc(full).replace(/\n/g, "<br>");
+                out += esc(full).replace(/\\n/g, "<br>");
                 if (meta) out += srcHtml(meta.sources) + trefHtml(meta.treffers, !!full);
                 wait.innerHTML = out || '<span class="ai-dots"><i></i><i></i><i></i></span>';
                 body.scrollTop = body.scrollHeight;
@@ -1244,10 +1244,10 @@ export function layout(title: string, active: string, body: Body, roles: string[
                   if (res.done) return;
                   buf += dec.decode(res.value, { stream: true });
                   var i;
-                  while ((i = buf.indexOf("\n\n")) >= 0) {
+                  while ((i = buf.indexOf("\\n\\n")) >= 0) {
                     var chunk = buf.slice(0, i); buf = buf.slice(i + 2);
                     var ev = "message", data = "";
-                    chunk.split("\n").forEach(function (l) {
+                    chunk.split("\\n").forEach(function (l) {
                       if (l.indexOf("event:") === 0) ev = l.slice(6).trim();
                       else if (l.indexOf("data:") === 0) data += l.slice(5).trim();
                     });
