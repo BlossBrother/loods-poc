@@ -9,6 +9,60 @@
 
 ---
 
+### v212 — AI-assistent: modelwissel-nazorg + streaming + 70B + dart/UX-fixes  (PWA ff-v184)
+> **LET OP (geverifieerd 13/6):** de "vanavond al gedane" modelwissel stond NIET in
+> deze repo — `rag.ts`/`kennisdump.ts` hadden nog het uitgefaseerde
+> `llama-3.1-8b-instruct` + oude parsing. Hier alsnog volledig (en verbeterd) gedaan.
+- **Taak 1 — centraal model:** `GEN_MODEL`/`EMBED_MODEL`/`CLASS_MODEL` geëxporteerd
+  uit `rag.ts`; `kennisdump.ts` importeert ze (losse modelstring weg). Eén plek.
+- **Taak 2 — tolerante parser:** `leesAntwoord()` (+`leesDelta()` voor streaming)
+  leest zowel `{response}` (oud) als `{choices[].message.content}` (OpenAI-formaat).
+  Op alle generatie-/classificatieplekken. Leeg = fout: in `ask()` valt een leeg of
+  weigerend antwoord door naar web/algemeen (nooit meer `answered:true` op een lege).
+- **Taak 3 — `max_tokens:300`** op alle generatiecalls (ask/web/algemeen + classificatie).
+- **Taak 4 — logging:** alle AI-catches loggen nu `console.error("ai:…", e)` (rag, route, kennisdump).
+- **Taak 5 — weigering soepeler:** leeg/heel kort (<20 tekens) telt als weigering;
+  lang/normaal antwoord blijft staan (minder onnodige extra generaties). Eén plek (`isWeigering`).
+- **Taak 6 — streaming:** nieuwe SSE-route `POST /api/assist-stream`. `beslisBron()`
+  kiest de bron uit retrieval (kennisbank → web → algemeen) zodat normaal één generatie
+  vuurt; label + bronnen + intranet-treffers komen als `meta` vóór het eerste token,
+  daarna stream van het antwoord (`delta`). FTS-treffers + bronbesluit draaien parallel.
+  De client valt bij élke streaming-fout terug op het bestaande `/api/assist` (JSON),
+  dus een streaming-probleem kan de assistent niet breken. Chatgeschiedenis in
+  `sessionStorage` (overleeft een onverhoopte reload).
+- **Taak 10 — zwaar model:** `GEN_MODEL = @cf/meta/llama-3.3-70b-instruct-fp8-fast`
+  (leestekst); classificatie op `@cf/meta/llama-3.2-3b-instruct`. Samen met streaming
+  live, zodat de tragere 70B niet als stilte voelt.
+- **Taak 7 — assistent-paneel:** (7a) alleen interne links sluiten het paneel; externe
+  bronlinks openen in een nieuw tabblad en laten het antwoord staan. (7b)
+  `overscroll-behavior-y:contain` op het paneel + `:none` app-breed (stond er al) →
+  geen pull-to-refresh-reload; chat in `sessionStorage` als vangnet. (7c) paneelhoogte
+  volgt de inhoud tot `70dvh`, pas dáárboven interne scroll.
+- **Taak 8 — darts:** Spotify-embed werkte niet door ontbrekende CSP `frame-src`
+  (viel terug op `default-src 'self'` → wit blok); `frame-src https://open.spotify.com`
+  + `media-src 'self' https: blob:` toegevoegd, iframe `allow` met autoplay. Shotcaller:
+  iOS audio-/speech-unlock op de eerste aanraking (warmTTS). NB: een Spotify-speler ín
+  de dart pit zelf zit (nog) niet in de code — alleen op de accountpagina; los te bouwen.
+- **Taak 9 — sparkle-knop:** dekkende pil (`--card-hi`/`--surface` + `--line`-rand)
+  i.p.v. transparant, zodat het icoon niet wegvalt over content (light + dark via tokens).
+
+### v211 — Pulse-surveys (anoniem) + vandaag-kop bevestigd  (PWA ff-v183)
+- **Pulse-surveys (Beheer → Pulse, nieuw — migratie 0023 vereist):** anonieme
+  peilingen als kaart in de home-feed (Workvivo-patroon). Eén vraag tegelijk actief;
+  type schaal 1–5 of meerkeuze. **Anoniem by design**: het antwoord (pulse_antwoorden)
+  bevat géén persoonskoppeling; dubbel stemmen wordt voorkomen via pulse_stemmers met
+  een onomkeerbare HMAC-hash van het e-mailadres die NIET aan het antwoord gekoppeld is.
+  Resultaten verschijnen pas vanaf **5 reacties** en worden **niet per afdeling**
+  uitgesplitst (privacy bij kleine groepen, 47 medewerkers). Beheer: vraag activeren
+  (sluit de vorige), live resultaat met balkjes + gemiddelde, vraag sluiten. Home-kaart
+  alleen voor herkende gebruikers die nog niet stemden; stem via POST /pulse/antwoord
+  (?ok=pulse omzeilt de SW-cache). src/pulse.ts + src/views/beheer.ts (beheerPulse) +
+  home2.ts (kaart). **Draaien:** `npx wrangler d1 execute fresh-forward-db --remote --file=migrations/0023_pulse.sql`
+- **Vandaag-kop**: geverifieerd dat de "VANDAAG"-sectie op home (datum, statusvraag,
+  events vandaag, kantine) al live is sinds v201–v205; geen herbouw nodig. Resterend
+  rapport-puntje (kantine-deadlinetijd "tot 10:30") staat als kleine optionele
+  vervolgklus genoteerd.
+
 ### v210 — Security-hardening (Ronde 0) + beheerbare snelkoppelingen  (PWA ff-v182)
 **Security (deepcheck 12/6 — geen nieuwe migraties nodig):**
 - **Portaal-bestands-IDOR dicht** (§3.1): `/portaal/bestand` serveert nu alleen

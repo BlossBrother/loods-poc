@@ -217,6 +217,11 @@ const DART_SCRIPT = `<script>
       }catch(e){ AUDIO_MISS[key]=1; }
     }
     tts(t); }
+  // Taak 8: iOS ontgrendelt speechSynthesis/Audio pas na een user-gesture. Warm bij
+  // de eerste aanraking eenmalig op, anders blijft de shotcaller stil (regressie PJ).
+  var _ttsWarm=false;
+  function warmTTS(){ if(_ttsWarm) return; _ttsWarm=true; try{ var u=new SpeechSynthesisUtterance(' '); u.volume=0; speechSynthesis.speak(u); }catch(e){} }
+  document.addEventListener('pointerdown', warmTTS, true);
   var G=null;
   function save(){ try{ if(G) localStorage.setItem(SKEY, JSON.stringify(G)); }catch(e){} }
   function clearSaved(){ try{ localStorage.removeItem(SKEY); }catch(e){} }

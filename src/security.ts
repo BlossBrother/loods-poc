@@ -16,6 +16,10 @@ export const securityHeaders: MiddlewareHandler = async (c, next) => {
       "script-src 'self' 'unsafe-inline'",
       "connect-src 'self'",
       "manifest-src 'self'",
+      // Spotify-embed (intro tune op de accountpagina / dart pit). Zonder frame-src
+      // viel dit terug op default-src 'self' -> iframe geblokkeerd (wit blok). (taak 8)
+      "frame-src https://open.spotify.com",
+      "media-src 'self' https: blob:",
       "base-uri 'self'",
       "form-action 'self'",
       "frame-ancestors 'none'",

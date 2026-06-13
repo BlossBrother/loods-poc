@@ -7,7 +7,7 @@ import { crmDb, listTaken } from "./crm/data";
 import { buildForYou, touchSeen, groet, type ForYou } from "./foryou";
 import { getHeaderConfig, getVariants, pickGreeting, amsterdamHour, saveHeaderConfig, saveVariants, resetHeader, DEFAULT_CONFIG, DEFAULT_VARIANTS, type HeaderConfig, type GreetingVariant } from "./headercfg";
 import { beheerHeader } from "./views/beheerheader";
-import { ask as kbAsk, reindexAll as kbReindex, algemeenAntwoord, removeDoc as removeKbDoc, webZoek } from "./rag";
+import { ask as kbAsk, reindexAll as kbReindex, algemeenAntwoord, removeDoc as removeKbDoc, webZoek, beslisBron, leesDelta, GEN_MODEL } from "./rag";
 import { listDump, verwerkDump, zetDumpAudience, verwijderDump } from "./kennisdump";
 import { haalAnalytics } from "./analytics";
 import { stijlgidsPage } from "./views/stijlgids";
@@ -36,9 +36,11 @@ import {
   beheerKennisdump,
   beheerAnalytics,
   beheerTiles,
+  beheerPulse,
   type LeesItem,
 } from "./views/beheer";
 import { getTiles, saveTiles, resetTiles } from "./tiles";
+import { getActievePulse, heeftGestemd, stem as pulseStem, listPulse, createPulse, sluitPulse, pulseResultaat } from "./pulse";
 import { bevestigGelezen, gelezenDoor, leesOverzicht, registreerGezien } from "./leesbevestiging";
 import { syncAccessUitzendkrachten, accessSyncGeconfigureerd } from "./accesssync";
 import { zetStatus, wieIsErVandaag, opschoonAanwezigheid, isAanwStatus } from "./aanwezigheid";
@@ -664,6 +666,16 @@ app.get("/", async (c) => {
       }
     } catch { /* tabel ontbreekt -> geen banner */ }
   }
+  // v211: actieve pulse-vraag, alleen voor een herkende gebruiker die nog niet stemde.
+  let pulse: { id: string; vraag: string; type: "schaal" | "keuze"; opties: string[] } | null = null;
+  if (email) {
+    try {
+      const pv = await getActievePulse(c.env);
+      if (pv && !(await heeftGestemd(c.env, pv.id, email))) {
+        pulse = { id: pv.id, vraag: pv.vraag, type: pv.type, opties: pv.opties };
+      }
+    } catch { /* geen pulse */ }
+  }
   // Teller-chips + Voor jou voeden uit dezelfde bron als de headerteller (foryou).
   const CHIP_ROUTE: Record<string, string> = { prikbord: "/social", meldingen: "/meldingen", nieuws: "/nieuws", agenda: "/agenda", competitie: "/competitie", kantine: "/friet", trainingen: "/trainingen", team: "/smoelenboek", documenten: "/documenten", crm: "/crm" };
   // v181: documenten = boek (was 'file', identiek aan Nieuws) — nu gelijk aan zijbalk/ballon.
@@ -721,6 +733,7 @@ app.get("/", async (c) => {
     vandaag,
     kantine,
     statusVraag,
+    pulse,
     voorJou,
     nieuws: nieuwsCards,
     jarige: eersteJarige
@@ -1526,19 +1539,15 @@ app.post("/api/assist", async (c) => {
     if (!rateLimit(limietKey("ask", wie, c.req.header("cf-connecting-ip")), 6, 60_000)) {
       return c.json({ treffers, answer: "Even rustig aan — probeer het over een minuut opnieuw.", mode: "algemeen" });
     }
-    const res = await kbAsk(c.env, q).catch(() => null);
-    // v201: agent-keten — het interne antwoord BEOORDELEN i.p.v. blind vertrouwen.
-    // De RAG vindt soms vaag verwante chunks ("kas" -> kantine/kassa) en zegt dan
-    // zélf "kan ik niet vinden in de context"; dat is geen antwoord -> door.
-    const weigering = (s: string) =>
-      s.length < 280 &&
-      /(kan|kon)[^.]{0,60}(geen|niet)[^.]{0,50}(vinden|terugvinden|beantwoorden)|geen informatie (gevonden|beschikbaar|over)|niet (terug te vinden|beschikbaar) in|(meegeleverde|gegeven|beschikbare) context|niet in de (context|kennisbank)/i.test(s);
-    if (res && res.answered && !weigering(res.answer)) { answer = res.answer; sources = res.sources; mode = "kennisbank"; }
+    const res = await kbAsk(c.env, q).catch((e) => { console.error("ai:assist:kb", e); return null; });
+    // ask() beoordeelt nu zélf leeg/weigering (taak 5): answered=false => doorvallen
+    // naar web -> algemeen. Geen losse weigering-regex meer hier nodig.
+    if (res && res.answered) { answer = res.answer; sources = res.sources; mode = "kennisbank"; }
     else {
       // v206: stap 3 — live webzoek (Tavily) mét bronnen; pas daarna kale modelkennis.
-      const web = await webZoek(c.env, q).catch(() => null);
+      const web = await webZoek(c.env, q).catch((e) => { console.error("ai:assist:web", e); return null; });
       if (web) { answer = web.answer; sources = web.sources; mode = "web"; }
-      else { answer = await algemeenAntwoord(c.env, q).catch(() => "Daar kan ik nu even niet bij — probeer het straks opnieuw."); mode = "algemeen"; }
+      else { answer = await algemeenAntwoord(c.env, q); mode = "algemeen"; }
     }
     c.executionCtx.waitUntil((async () => {
       try {
@@ -1548,6 +1557,78 @@ app.post("/api/assist", async (c) => {
     })());
   }
   return c.json({ treffers, answer, sources, mode });
+});
+
+// v211: streaming-variant van de assistent (taak 6). Beslist eerst de bron uit
+// retrieval (één generatie), stuurt label+bronnen+treffers als 'meta', en streamt
+// daarna het antwoord token-voor-token als 'delta'. De client valt bij elke fout
+// terug op /api/assist (JSON), dus een streaming-probleem breekt de assistent niet.
+app.post("/api/assist-stream", async (c) => {
+  const wie = await resolveAccessEmail(c, c.env);
+  const body = (await c.req.json().catch(() => ({}))) as { q?: string };
+  const q = String(body.q ?? "").slice(0, 500).trim();
+  if (!q) return c.json({ error: "leeg" }, 400);
+  if (!rateLimit(limietKey("ask", wie, c.req.header("cf-connecting-ip")), 6, 60_000)) {
+    return c.json({ error: "te-veel" }, 429);
+  }
+  // Treffers (FTS) en bron-besluit parallel — scheelt wachttijd (taak 6).
+  const [treffers, besluit] = await Promise.all([
+    zoekFts(c.env, q, 3).catch(() => [] as ZoekGroep[]),
+    beslisBron(c.env, q).catch((e) => { console.error("ai:stream:beslis", e); return null; }),
+  ]);
+  const enc = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: string, data: unknown) => {
+        try { controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); } catch { /* gesloten */ }
+      };
+      try {
+        if (!besluit || !c.env.AI) {
+          send("meta", { treffers, mode: undefined, sources: [] });
+          send("done", {});
+          return;
+        }
+        send("meta", { treffers, mode: besluit.mode, sources: besluit.sources });
+        let full = "";
+        const aiStream = (await c.env.AI!.run(GEN_MODEL, { messages: besluit.messages, stream: true, max_tokens: 300 })) as unknown as ReadableStream<Uint8Array>;
+        const reader = aiStream.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line.startsWith("data:")) continue;
+            const payload = line.slice(5).trim();
+            if (!payload || payload === "[DONE]") continue;
+            try {
+              const delta = leesDelta(JSON.parse(payload));
+              if (delta) { full += delta; send("delta", { t: delta }); }
+            } catch { /* niet-JSON keep-alive regel */ }
+          }
+        }
+        send("done", { mode: besluit.mode });
+        c.executionCtx.waitUntil((async () => {
+          try {
+            if (c.env.DB) await c.env.DB.prepare("INSERT INTO ask_log (id, user_ref, question, answered, source_ids, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+              .bind("al" + crypto.randomUUID().replace(/-/g, ""), null, q, besluit.mode === "kennisbank" ? 1 : 0, JSON.stringify((besluit.sources ?? []).map((x) => x.title)), Date.now()).run();
+          } catch (e) { console.error("ai:stream:log", e); }
+        })());
+      } catch (e) {
+        console.error("ai:stream", e);
+        send("error", { msg: "stream-fout" });
+      } finally {
+        try { controller.close(); } catch { /* al gesloten */ }
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
+  });
 });
 
 app.post("/api/kennisbank/reindex", async (c) => {
@@ -2344,6 +2425,39 @@ app.post("/beheer/tiles", async (c) => {
   return c.redirect("/beheer/tiles?ok=1");
 });
 
+// ---- Beheer: Pulse (anonieme peilingen) ----
+app.get("/beheer/pulse", async (c) => {
+  const medewerkers = await getMedewerkers(c.env);
+  if (!(await magBeheren(c, medewerkers))) return c.html(layout("Geen toegang", "/", geenToegang(), c.get("roles") ?? []), 403);
+  const vragen = await listPulse(c.env);
+  const actiefV = vragen.find((v) => v.actief) ?? null;
+  const actief = actiefV ? await pulseResultaat(c.env, actiefV) : null;
+  const melding = c.req.query("ok") === "sluit" ? "Vraag gesloten." : c.req.query("ok") ? "Vraag geactiveerd." : undefined;
+  return c.html(layout("Pulse", "/", beheerPulse(vragen, actief, { melding }), c.get("roles") ?? []));
+});
+
+app.post("/beheer/pulse", async (c) => {
+  const medewerkers = await getMedewerkers(c.env);
+  if (!(await magBeheren(c, medewerkers))) return c.html(layout("Geen toegang", "/", geenToegang(), c.get("roles") ?? []), 403);
+  const form = await c.req.formData();
+  const sluit = String(form.get("sluit") ?? "");
+  if (sluit) {
+    await sluitPulse(c.env, sluit);
+    await logAudit(c.env, await resolveAccessEmail(c, c.env), "close", "pulse", sluit);
+    return c.redirect("/beheer/pulse?ok=sluit");
+  }
+  const vraag = String(form.get("vraag") ?? "").slice(0, 160).trim();
+  if (!vraag) return c.redirect("/beheer/pulse");
+  const type = form.get("type") === "keuze" ? "keuze" : "schaal";
+  const opties = type === "keuze"
+    ? String(form.get("opties") ?? "").split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 8)
+    : [];
+  if (type === "keuze" && opties.length < 2) return c.redirect("/beheer/pulse");
+  await createPulse(c.env, vraag, type, opties);
+  await logAudit(c.env, await resolveAccessEmail(c, c.env), "create", "pulse", vraag.slice(0, 40));
+  return c.redirect("/beheer/pulse?ok=1");
+});
+
 // ---- Beheer: Header & begroeting ----
 app.get("/beheer/header", async (c) => {
   const medewerkers = await getMedewerkers(c.env);
@@ -2692,6 +2806,20 @@ app.post("/vandaag", async (c) => {
   // overslaan zodat je de vraag direct ziet verdwijnen.
   if (String(form.get("terug") ?? "") === "/") return c.redirect("/?ok=status");
   return c.redirect("/vandaag?ok=" + encodeURIComponent(status ? "Status doorgegeven" : "Status gewist"));
+});
+
+// v211: anonieme pulse-stem vanaf de home-kaart. Stem wordt niet aan de persoon
+// gekoppeld; dubbel stemmen wordt voorkomen via een onomkeerbare marker (pulse.ts).
+app.post("/pulse/antwoord", async (c) => {
+  const email = await resolveAccessEmail(c, c.env);
+  const form = await c.req.formData();
+  const id = String(form.get("id") ?? "");
+  const waarde = String(form.get("waarde") ?? "").slice(0, 120).trim();
+  const terug = veiligTerug(String(form.get("terug") ?? ""), "/");
+  if (email && id && waarde) {
+    try { await pulseStem(c.env, id, email, waarde); } catch { /* stil: pulse niet beschikbaar */ }
+  }
+  return c.redirect(terug + (terug.includes("?") ? "&" : "?") + "ok=pulse");
 });
 
 app.post("/agenda/verlof/sync", async (c) => {

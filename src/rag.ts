@@ -4,9 +4,42 @@
 // blijft de rest van de app gewoon werken.
 import type { Env } from "./airtable";
 
-const EMBED_MODEL = "@cf/baai/bge-base-en-v1.5"; // 768 dims — moet matchen met de index
-const GEN_MODEL = "@cf/meta/llama-3.1-8b-instruct";
+// Centrale modelconfig (taak 1) — één plek, geïmporteerd door kennisdump.ts e.a.
+// Op 30-05-2026 zijn de kále llama-3.1-modellen (incl. 8b en 70b) uitgefaseerd;
+// alleen de -fp8-fast-variant overleeft. Gebruik exact deze string.
+export const EMBED_MODEL = "@cf/baai/bge-base-en-v1.5"; // 768 dims — moet matchen met de index
+export const GEN_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"; // leestekst (kennisbank/web/algemeen)
+export const CLASS_MODEL = "@cf/meta/llama-3.2-3b-instruct"; // classificatie/scheidsrechter: snel, kwaliteit minder kritiek
 const TOP_K = 5;
+
+// Taak 2: lees zowel het oude Workers-AI-formaat ({response}) als het nieuwe
+// OpenAI-chat-formaat ({choices:[{message:{content}}]}). Leeg = leeg (= fout).
+export function leesAntwoord(res: unknown): string {
+  const r = res as { response?: unknown; choices?: { message?: { content?: unknown } }[] };
+  const viaResponse = typeof r?.response === "string" ? r.response : "";
+  const c = r?.choices?.[0]?.message?.content;
+  const viaChoices = typeof c === "string" ? c : "";
+  return String(viaResponse || viaChoices || "").trim();
+}
+
+// Eén delta uit een streaming-chunk (beide formaten): {response} of {choices:[{delta:{content}}]}.
+export function leesDelta(obj: unknown): string {
+  const o = obj as { response?: unknown; choices?: { delta?: { content?: unknown } }[] };
+  const a = typeof o?.response === "string" ? o.response : "";
+  const d = o?.choices?.[0]?.delta?.content;
+  const b = typeof d === "string" ? d : "";
+  return a || b || "";
+}
+
+// Taak 5: een kennisbank-antwoord telt als weigering bij leeg/heel kort, of bij een
+// expliciete "niet gevonden". Conservatief: een lang of normaal antwoord blijft staan
+// (voorkomt dat een góéd antwoord onnodig een extra generatie triggert).
+export function isWeigering(s: string): boolean {
+  const t = (s || "").trim();
+  if (t.length < 20) return true;
+  if (t.length >= 280) return false;
+  return /(kan|kon)[^.]{0,60}(geen|niet)[^.]{0,50}(vinden|terugvinden|beantwoorden)|geen informatie (gevonden|beschikbaar|over)|niet (terug te vinden|beschikbaar) in|(meegeleverde|gegeven|beschikbare) context|niet in de (context|kennisbank)/i.test(t);
+}
 
 const SYSTEM = `Je bent de interne assistent van Fresh Forward. Beantwoord de vraag
 UITSLUITEND op basis van de meegeleverde context. Verzin niets. Als de context geen
@@ -154,8 +187,12 @@ export async function removeDoc(env: Env, docId: string): Promise<void> {
 // v206: live webzoek (Tavily) — stap 3 in de assistent-keten, vóór de kale
 // algemene kennis. Levert een NL-samenvatting via het eigen LLM + bronlinks.
 // Zonder TAVILY_API_KEY (secret) geeft dit null en valt de keten gewoon terug.
-export async function webZoek(env: Env, vraag: string): Promise<{ answer: string; sources: { title: string; url?: string }[] } | null> {
-  if (!env.TAVILY_API_KEY || !env.AI) return null;
+const WEB_SYS = "Beantwoord de vraag kort en feitelijk in het Nederlands (max ±150 woorden), uitsluitend op basis van de meegegeven webfragmenten. Staat het antwoord er niet in, zeg dat dan. Geen bronnummers in de lopende tekst.";
+
+// Retrieval-only: Tavily-fragmenten + bronnen (géén generatie). Gedeeld door webZoek
+// (non-streaming) en beslisBron (streaming), zodat de Tavily-call op één plek staat.
+export async function webContext(env: Env, vraag: string): Promise<{ ctx: string; sources: { title: string; url?: string }[] } | null> {
+  if (!env.TAVILY_API_KEY) return null;
   try {
     const res = await fetch("https://api.tavily.com/search", {
       method: "POST",
@@ -167,17 +204,31 @@ export async function webZoek(env: Env, vraag: string): Promise<{ answer: string
     const hits = (j.results ?? []).filter((h) => h && h.title && h.content).slice(0, 5);
     if (!hits.length) return null;
     const ctx = hits.map((h, i) => `[${i + 1}] ${h.title}\n${h.content}`).join("\n\n").slice(0, 6000);
+    return { ctx, sources: hits.map((h) => ({ title: h.title.slice(0, 80), url: h.url })) };
+  } catch (e) {
+    console.error("ai:webContext", e);
+    return null; // webzoek is een verrijking, nooit een breekpunt
+  }
+}
+
+export async function webZoek(env: Env, vraag: string): Promise<{ answer: string; sources: { title: string; url?: string }[] } | null> {
+  if (!env.AI) return null;
+  const web = await webContext(env, vraag);
+  if (!web) return null;
+  try {
     const r = await env.AI.run(GEN_MODEL, {
       messages: [
-        { role: "system", content: "Beantwoord de vraag kort en feitelijk in het Nederlands (max ±120 woorden), uitsluitend op basis van de meegegeven webfragmenten. Staat het antwoord er niet in, zeg dat dan. Geen bronnummers in de lopende tekst." },
-        { role: "user", content: `Webfragmenten:\n${ctx}\n\nVraag: ${vraag}` },
+        { role: "system", content: WEB_SYS },
+        { role: "user", content: `Webfragmenten:\n${web.ctx}\n\nVraag: ${vraag}` },
       ],
+      max_tokens: 300,
     });
-    const answer = String((r as { response?: string }).response ?? "").trim();
+    const answer = leesAntwoord(r);
     if (!answer) return null;
-    return { answer, sources: hits.map((h) => ({ title: h.title.slice(0, 80), url: h.url })) };
-  } catch {
-    return null; // webzoek is een verrijking, nooit een breekpunt
+    return { answer, sources: web.sources };
+  } catch (e) {
+    console.error("ai:webZoek", e);
+    return null;
   }
 }
 
@@ -185,15 +236,23 @@ export async function webZoek(env: Env, vraag: string): Promise<{ answer: string
 // weet én de invoer een echte vraag is (PJ 12/6: "hoeveel kassen staan er in
 // Nederland?" moet ook antwoord krijgen). Het antwoord wordt in de UI gelabeld als
 // algemene kennis, zodat niemand het voor intern beleid aanziet.
+const ALG_SYS = "Je bent de assistent van het Fresh Forward-intranet (Nederlandse kwekerij/agro-sector). Beantwoord de vraag kort en feitelijk in het Nederlands (max ±150 woorden). Weet je iets niet zeker, zeg dat eerlijk. Verzin nooit interne bedrijfsinformatie; je antwoordt uit algemene kennis.";
+
 export async function algemeenAntwoord(env: Env, vraag: string): Promise<string> {
   if (!env.AI) return "AI is hier nog niet geactiveerd.";
-  const res = await env.AI.run(GEN_MODEL, {
-    messages: [
-      { role: "system", content: "Je bent de assistent van het Fresh Forward-intranet (Nederlandse kwekerij/agro-sector). Beantwoord de vraag kort en feitelijk in het Nederlands (max ±120 woorden). Weet je iets niet zeker, zeg dat eerlijk. Verzin nooit interne bedrijfsinformatie; je antwoordt uit algemene kennis." },
-      { role: "user", content: vraag },
-    ],
-  });
-  return String((res as { response?: string }).response ?? "").trim() || "Daar heb ik zo geen antwoord op.";
+  try {
+    const res = await env.AI.run(GEN_MODEL, {
+      messages: [
+        { role: "system", content: ALG_SYS },
+        { role: "user", content: vraag },
+      ],
+      max_tokens: 300,
+    });
+    return leesAntwoord(res) || "Daar heb ik zo geen antwoord op.";
+  } catch (e) {
+    console.error("ai:algemeen", e);
+    return "Daar kan ik nu even niet bij — probeer het straks opnieuw.";
+  }
 }
 
 export async function ask(env: Env, question: string, opts: { audiences?: string[]; lang?: string } = {}): Promise<AskResult> {
@@ -221,7 +280,63 @@ export async function ask(env: Env, question: string, opts: { audiences?: string
   const sys = opts.lang && !/nederlands|^nl$/i.test(opts.lang)
     ? SYSTEM.replace("Antwoord in het Nederlands, bondig en praktisch.", `Antwoord in het ${opts.lang}, bondig en praktisch.`)
     : SYSTEM;
-  const res = await env.AI!.run(GEN_MODEL, { messages: [{ role: "system", content: sys }, { role: "user", content: `Context:\n${context}\n\nVraag: ${question}` }] });
-  const answer = String((res as { response?: string }).response ?? "").trim() || "Geen antwoord beschikbaar.";
+  let answer = "";
+  try {
+    const res = await env.AI!.run(GEN_MODEL, { messages: [{ role: "system", content: sys }, { role: "user", content: `Context:\n${context}\n\nVraag: ${question}` }], max_tokens: 300 });
+    answer = leesAntwoord(res);
+  } catch (e) {
+    console.error("ai:ask", e);
+  }
+  // Taak 2/5: leeg of weigering -> answered:false, zodat de keten doorvalt naar web/
+  // algemeen (een leeg "Geen antwoord beschikbaar." mag NOOIT meer answered:true zijn).
+  if (!answer || isWeigering(answer)) {
+    return { answer: answer || "Ik kan dit niet terugvinden in de kennisbank.", sources, answered: false };
+  }
   return { answer, sources, answered: true };
+}
+
+// Streaming-ondersteuning (taak 6): bepaal de bron (kennisbank -> web -> algemeen)
+// uit retrieval-signalen ZONDER te genereren, en geef de messages terug die de
+// route vervolgens streamend aan het model voert. Zo vuurt normaliter één generatie
+// (taak 5/10) en zijn label + bronnen al bekend vóór het eerste token.
+export interface BronBesluit {
+  mode: "kennisbank" | "web" | "algemeen";
+  sources: AskResult["sources"];
+  messages: { role: "system" | "user"; content: string }[];
+}
+
+export async function beslisBron(env: Env, question: string, opts: { audiences?: string[]; lang?: string } = {}): Promise<BronBesluit> {
+  // 1. Kennisbank (RAG-retrieval).
+  if (ragActief(env)) {
+    try {
+      const emb = await env.AI!.run(EMBED_MODEL, { text: [question] });
+      const qvec = (emb as { data: number[][] }).data[0];
+      const allowed = opts.audiences ?? ["public", "internal"];
+      const matches = await env.VECTORIZE!.query(qvec, { topK: TOP_K, returnMetadata: "all", filter: { audience: { $in: allowed } } });
+      const hits = (matches.matches ?? []).filter((m) => m.score >= 0.3 && allowed.includes(String((m.metadata as any)?.audience ?? "")));
+      if (hits.length) {
+        const ids = hits.map((m) => m.id);
+        const ph = ids.map((_, i) => `?${i + 1}`).join(",");
+        const rows = await db(env).prepare(`SELECT id, text FROM kb_chunks WHERE id IN (${ph})`).bind(...ids).all<{ id: string; text: string }>();
+        const textById = new Map((rows.results ?? []).map((r) => [r.id, r.text]));
+        const context = hits.map((m, i) => `[${i + 1}] ${textById.get(m.id) ?? ""}`).join("\n\n");
+        const seen = new Set<string>();
+        const sources = hits.map((m) => m.metadata).filter((md) => md && !seen.has(md.doc_id) && seen.add(md.doc_id))
+          .map((md) => ({ title: String(md.title ?? "bron"), url: md.url || undefined, category: md.category || undefined }));
+        const sys = opts.lang && !/nederlands|^nl$/i.test(opts.lang)
+          ? SYSTEM.replace("Antwoord in het Nederlands, bondig en praktisch.", `Antwoord in het ${opts.lang}, bondig en praktisch.`)
+          : SYSTEM;
+        return { mode: "kennisbank", sources, messages: [{ role: "system", content: sys }, { role: "user", content: `Context:\n${context}\n\nVraag: ${question}` }] };
+      }
+    } catch (e) {
+      console.error("ai:beslisBron:kb", e);
+    }
+  }
+  // 2. Web (Tavily) — retrieval-only, daarna streamend samengevat.
+  const web = await webContext(env, question);
+  if (web) {
+    return { mode: "web", sources: web.sources, messages: [{ role: "system", content: WEB_SYS }, { role: "user", content: `Webfragmenten:\n${web.ctx}\n\nVraag: ${question}` }] };
+  }
+  // 3. Algemene kennis.
+  return { mode: "algemeen", sources: [], messages: [{ role: "system", content: ALG_SYS }, { role: "user", content: question }] };
 }

@@ -5,7 +5,7 @@
 // klantenportaal wordt het pas als de beheerder dat expliciet aanzet
 // (zetDumpAudience) — de AI mag alleen suggereren.
 import type { Env } from "./airtable";
-import { indexDoc, removeDoc } from "./rag";
+import { indexDoc, removeDoc, CLASS_MODEL, leesAntwoord } from "./rag";
 
 const TENANT = "default";
 function db(env: Env): D1Database {
@@ -62,13 +62,16 @@ export async function verwerkDump(env: Env, naam: string, bytes: ArrayBuffer, do
   // 3. AI-categorisatie: titel, categorie, samenvatting + klant-SUGGESTIE.
   let meta = { titel: naam.replace(/\.[a-z0-9]+$/i, ""), categorie: "overig", samenvatting: "", klant: false };
   try {
-    const res = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+    // Classificatie draait op het mini-model (CLASS_MODEL): snelheid telt, kwaliteit
+    // is hier minder kritiek (taak 10-architectuur). Het zware model is voor leestekst.
+    const res = await env.AI.run(CLASS_MODEL, {
       messages: [
         { role: "system", content: `Je krijgt een document van kwekerij Fresh Forward (aardbeien-/zachtfruitrassen). Antwoord ALLEEN met geldige JSON: {"titel":"korte nette titel","categorie":"een van: ${CATS.join("|")}","samenvatting":"één zin Nederlands","klant":true of false}. "klant" is true alléén als het document duidelijk voor klanten/telers bedoeld is (rasinformatie, teeltadvies, nieuwsbrief).` },
         { role: "user", content: md.slice(0, 6000) },
       ],
+      max_tokens: 300,
     });
-    const txt = String((res as { response?: string }).response ?? "");
+    const txt = leesAntwoord(res);
     const j = JSON.parse(txt.slice(txt.indexOf("{"), txt.lastIndexOf("}") + 1)) as { titel?: string; categorie?: string; samenvatting?: string; klant?: boolean };
     meta = {
       titel: String(j.titel || meta.titel).slice(0, 140),
@@ -76,7 +79,7 @@ export async function verwerkDump(env: Env, naam: string, bytes: ArrayBuffer, do
       samenvatting: String(j.samenvatting || "").slice(0, 300),
       klant: j.klant === true,
     };
-  } catch { /* categorisatie is best effort; defaults blijven staan */ }
+  } catch (e) { console.error("ai:kennisdump-classificatie", e); /* best effort; defaults blijven staan */ }
   // 4. In de kennisbank — ALTIJD intern (klant-zichtbaar = expliciete beheeractie).
   await db(env)
     .prepare("INSERT OR REPLACE INTO kb_docs (id, category, variety, title, body, url, audience, updated_at) VALUES (?, ?, NULL, ?, ?, ?, 'internal', unixepoch())")

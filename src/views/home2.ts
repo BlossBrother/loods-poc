@@ -472,6 +472,15 @@ export const HOME_SHELL_CSS = `
   .hm .acard .tx{flex:1;min-width:0}
   .hm .acard h4{font-size:14px;font-weight:700;line-height:1.3}
   .hm .acard p{font-size:12.5px;color:var(--hm-sub);margin-top:2px}
+  /* v211: pulse-kaart (anonieme peiling) in de feed. */
+  .hm .pulse{margin-bottom:10px}
+  .hm .pulse h4{font-size:14px;font-weight:700;line-height:1.3}
+  .hm .pulse-anon{font-size:11.5px;color:var(--hm-sub);margin-top:3px}
+  .hm .pulse-opts{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .hm .pulse-b{flex:1 1 auto;min-width:44px;min-height:44px;border:1px solid var(--hm-line);background:var(--hm-card);border-radius:13px;font-weight:700;font-size:15px;color:var(--hm-ink);cursor:pointer}
+  .hm .pulse-b:active{transform:scale(.96)}
+  .hm .pulse-keuze{flex:1 1 100%;min-height:42px;font-size:13.5px}
+  .hm .pulse-scale{display:flex;justify-content:space-between;font-size:11px;color:var(--hm-sub);margin-top:6px;padding:0 2px}
   .hm .mread .tile{background:var(--grad)}
   .hm .mread .tile svg{stroke:#fff}
   .hm .hghost{flex:none;border:1.5px solid var(--hm-accent);background:none;color:var(--hm-accent);font-weight:700;font-size:12.5px;border-radius:999px;padding:7px 13px;cursor:pointer}
@@ -509,6 +518,8 @@ export interface HomeShellData {
   // v205: afwezigen verhuisd naar een header-chip ("Vandaag", teller) — PJ vond de
   // rij in de kaart te dominant; de one-tap-vraag hieronder blijft de actie.
   statusVraag?: boolean; // v204: one-tap "Waar werk je vandaag?" (ma-vr, nog niet ingevuld)
+  // v211: anonieme pulse-vraag als kaart in de feed (alleen tonen als nog niet beantwoord).
+  pulse?: { id: string; vraag: string; type: "schaal" | "keuze"; opties: string[] } | null;
   voorJou: HomeActie[];
   nieuws: HomeNieuws[];
   jarige?: { naam: string; datum: string; vandaag: boolean } | null;
@@ -573,6 +584,21 @@ export function homeShellContent(d: HomeShellData) {
             </a>`
           : ""}
       </div>`
+    : ""}
+  ${d.pulse
+    ? html`<div class="eyebrow"><span>EVEN PEILEN</span></div>
+      <form class="card pulse" method="post" action="/pulse/antwoord" data-no-queue>
+        <input type="hidden" name="terug" value="/" />
+        <input type="hidden" name="id" value="${d.pulse.id}" />
+        <h4>${d.pulse.vraag}</h4>
+        <p class="pulse-anon">Anoniem · resultaten vanaf 5 reacties</p>
+        <div class="pulse-opts">
+          ${d.pulse.type === "schaal"
+            ? [1, 2, 3, 4, 5].map((n) => html`<button name="waarde" value="${n}" class="pulse-b">${n}</button>`)
+            : d.pulse.opties.map((o) => html`<button name="waarde" value="${o}" class="pulse-b pulse-keuze">${o}</button>`)}
+        </div>
+        ${d.pulse.type === "schaal" ? html`<div class="pulse-scale"><span>Oneens</span><span>Eens</span></div>` : ""}
+      </form>`
     : ""}
   ${d.voorJou.length > 0
     ? html`<div class="eyebrow"><span>VOOR JOU</span><a href="/voor-jou">Alles &rarr;</a></div>

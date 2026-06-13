@@ -49,7 +49,7 @@ export function mijnAccountPage(
       <label>Intro tune (Spotify-link)
         <input name="intro" value="${p.introTune ? `https://open.spotify.com/track/${p.introTune}` : ""}" placeholder="https://open.spotify.com/track/..." />
       </label>
-      ${embed ? html`<iframe style="border-radius:12px;margin-top:var(--sp-2);border:0" src="${embed}" width="100%" height="80" allow="encrypted-media" loading="lazy"></iframe>` : ""}
+      ${embed ? html`<iframe style="border-radius:12px;margin-top:var(--sp-2);border:0" src="${embed}" width="100%" height="80" allow="autoplay; encrypted-media; clipboard-write" loading="lazy"></iframe>` : ""}
       <label class="row" style="gap:var(--sp-2); font-weight:600; margin-top:10px"><input type="checkbox" name="verjaardag_zichtbaar" ${p.showBirthday !== false ? "checked" : ""} /> Mijn verjaardag tonen op het intranet</label>
       <button type="submit">Opslaan</button>
     </form>

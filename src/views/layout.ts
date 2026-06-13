@@ -506,9 +506,12 @@ export function layout(title: string, active: string, body: Body, roles: string[
          onbevestigde mutaties openstaan (html.ff-syncing via ffMutate). Geen tekst.
          Onder prefers-reduced-motion staat animatie globaal uit -> statisch icoontje. */
       /* v200: AI-assistent-knop linksboven (sparkle) — opent de assistent-sheet. */
-      header.app .hai{ display:inline-flex; align-items:center; justify-content:center; min-width:44px; min-height:44px;
-        margin:0; padding:0; background:none; border:0; cursor:pointer; color:var(--green); position:relative; z-index:1; }
-      header.app .hai svg{ width:22px; height:22px; }
+      /* Taak 9: dekkende pil i.p.v. transparant — icoon viel weg over content. Tenant-
+         tokens (card/line) geven in light én dark vanzelf het juiste contrast. */
+      header.app .hai{ display:inline-flex; align-items:center; justify-content:center; min-width:40px; min-height:40px; width:40px; height:40px;
+        margin:0; padding:0; cursor:pointer; color:var(--green); position:relative; z-index:1;
+        background:var(--card-hi, var(--surface)); border:1px solid var(--line); border-radius:999px; box-shadow:0 1px 2px rgba(10,14,20,.10); }
+      header.app .hai svg{ width:21px; height:21px; }
       header.app .hai:active{ transform:scale(.92); }
       /* Assistent-sheet: schuift over elke pagina heen; gesprek blijft staan bij navigeren. */
       .ai-scrim{ position:fixed; inset:0; z-index:calc(var(--z-overlay) + 4); background:rgba(0,0,0,.38); opacity:0; pointer-events:none; transition:opacity var(--dur-fast) var(--ease-in); }
@@ -522,7 +525,10 @@ export function layout(title: string, active: string, body: Body, roles: string[
       .ai-head svg{ width:18px; height:18px; color:var(--green); flex:none; }
       .ai-head strong{ flex:1; font-size:.95rem; }
       .ai-x{ background:none; border:0; color:var(--muted); font-size:1rem; cursor:pointer; padding:6px 8px; margin:-6px -8px -6px 0; }
-      .ai-body{ max-height:46vh; min-height:120px; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:10px; overscroll-behavior:contain; }
+      /* 7c: hoogte volgt de inhoud tot ~70dvh (dvh i.v.m. iOS-toetsenbord); pas dáárboven
+         interne scroll. 7b: overscroll-behavior-y:contain houdt het scrollen in het paneel
+         (geen scroll-chaining naar de pagina -> geen pull-to-refresh-reload). */
+      .ai-body{ max-height:70dvh; min-height:120px; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:10px; overscroll-behavior-y:contain; -webkit-overflow-scrolling:touch; }
       .ai-hint{ color:var(--muted); font-size:.85rem; margin:0; }
       .ai-msg{ max-width:88%; border-radius:16px; padding:10px 13px; font-size:.92rem; line-height:1.5; overflow-wrap:anywhere; }
       .ai-msg.me{ align-self:flex-end; background:linear-gradient(135deg,#3fa468,#236b41); color:#fff; border-bottom-right-radius:6px; }
@@ -1176,38 +1182,102 @@ export function layout(title: string, active: string, body: Body, roles: string[
         if (close) close.addEventListener("click", function () { setOpen(false); });
         if (scrim) scrim.addEventListener("click", function () { setOpen(false); });
         document.addEventListener("keydown", function (e) { if (e.key === "Escape") setOpen(false); });
-        // Interne treffer aangetikt -> sheet dicht, SPA-router neemt de navigatie over.
-        body.addEventListener("click", function (e) { if (e.target.closest && e.target.closest("a[href]")) setOpen(false); });
+        // 7a: alleen INTERNE links sluiten het paneel (SPA navigeert); externe bronlinks
+        // (target=_blank) openen in een nieuw tabblad en laten het antwoord staan.
+        body.addEventListener("click", function (e) {
+          var a = e.target.closest && e.target.closest("a[href]");
+          if (a && a.getAttribute("target") !== "_blank") setOpen(false);
+        });
         function esc(s) { var d = document.createElement("div"); d.textContent = String(s == null ? "" : s); return d.innerHTML; }
         function add(htmlStr, cls) { var d = document.createElement("div"); d.className = "ai-msg " + cls; d.innerHTML = htmlStr; body.appendChild(d); body.scrollTop = body.scrollHeight; return d; }
+        // 7b/7c: gesprek bewaren zodat een onverhoopte reload (pull-to-refresh) het niet wist.
+        function saveChat() { try { sessionStorage.setItem("ff_ai_chat", body.innerHTML); } catch (e) {} }
+        try { var _s = sessionStorage.getItem("ff_ai_chat"); if (_s) body.innerHTML = _s; } catch (e) {}
+        function srcHtml(sources) {
+          if (!sources || !sources.length) return "";
+          return '<div class="ai-src">' + sources.map(function (s) {
+            return s.url
+              ? '<a href="' + esc(s.url) + '"' + (String(s.url).indexOf("http") === 0 ? ' target="_blank" rel="noopener"' : "") + '>' + esc(s.title) + "</a>"
+              : "<span>" + esc(s.title) + "</span>";
+          }).join("") + "</div>";
+        }
+        function tagHtml(mode) {
+          if (mode === "algemeen") return '<span class="ai-tag">Algemene kennis (AI)</span>';
+          if (mode === "web") return '<span class="ai-tag">Van het web (AI)</span>';
+          if (mode === "kennisbank") return '<span class="ai-tag">Uit de kennisbank</span>';
+          return "";
+        }
+        function trefHtml(treffers, naAntwoord) {
+          var tr = (treffers || []).reduce(function (a, g) { return a.concat(g.items.map(function (it) { return { t: it.titel, r: it.route }; })); }, []).slice(0, 6);
+          if (!tr.length) return "";
+          return '<div class="ai-tag" style="margin-top:' + (naAntwoord ? "10px" : "0") + '">Gevonden op het intranet</div><div class="ai-src">' + tr.map(function (x) { return '<a href="' + esc(x.r) + '">' + esc(x.t) + "</a>"; }).join("") + "</div>";
+        }
         var busy = false;
+        // Niet-streaming terugval (oude /api/assist): rendert het volledige JSON-antwoord.
+        function renderJson(wait, d) {
+          var out = "";
+          if (d.answer) out += tagHtml(d.mode) + esc(d.answer).replace(/\n/g, "<br>") + srcHtml(d.sources);
+          out += trefHtml(d.treffers, !!d.answer);
+          if (!out) out = esc("Niets gevonden — probeer andere woorden, of stel het als vraag.");
+          wait.innerHTML = out; body.scrollTop = body.scrollHeight; saveChat();
+        }
+        function fallback(v, wait) {
+          return fetch("/api/assist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: v }) })
+            .then(function (r) { return r.json(); }).then(function (d) { renderJson(wait, d); });
+        }
+        // Streaming (taak 6): label + bronnen direct, daarna tekst token-voor-token.
+        function streamAsk(v, wait) {
+          return fetch("/api/assist-stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: v }) })
+            .then(function (r) {
+              if (!r.ok || !r.body || !r.body.getReader) throw new Error("no-stream");
+              var reader = r.body.getReader(), dec = new TextDecoder(), buf = "", meta = null, full = "";
+              function render() {
+                var out = "";
+                if (full || (meta && meta.mode)) out += tagHtml(meta && meta.mode);
+                out += esc(full).replace(/\n/g, "<br>");
+                if (meta) out += srcHtml(meta.sources) + trefHtml(meta.treffers, !!full);
+                wait.innerHTML = out || '<span class="ai-dots"><i></i><i></i><i></i></span>';
+                body.scrollTop = body.scrollHeight;
+              }
+              function pump() {
+                return reader.read().then(function (res) {
+                  if (res.done) return;
+                  buf += dec.decode(res.value, { stream: true });
+                  var i;
+                  while ((i = buf.indexOf("\n\n")) >= 0) {
+                    var chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+                    var ev = "message", data = "";
+                    chunk.split("\n").forEach(function (l) {
+                      if (l.indexOf("event:") === 0) ev = l.slice(6).trim();
+                      else if (l.indexOf("data:") === 0) data += l.slice(5).trim();
+                    });
+                    if (!data) continue;
+                    var obj; try { obj = JSON.parse(data); } catch (e) { obj = null; }
+                    if (!obj) continue;
+                    if (ev === "meta") { meta = obj; render(); }
+                    else if (ev === "delta") { full += obj.t || ""; render(); }
+                    else if (ev === "error") { throw new Error("stream-error"); }
+                  }
+                  return pump();
+                });
+              }
+              return pump().then(function () {
+                if (!full && !(meta && meta.treffers && meta.treffers.length)) throw new Error("leeg");
+                saveChat();
+              });
+            });
+        }
         form.addEventListener("submit", function (e) {
           e.preventDefault();
           var v = (q.value || "").trim();
           if (!v || busy) return;
           busy = true; q.value = "";
-          add(esc(v), "me");
+          add(esc(v), "me"); saveChat();
           var wait = add('<span class="ai-dots"><i></i><i></i><i></i></span>', "bot");
-          fetch("/api/assist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: v }) })
-            .then(function (r) { return r.json(); })
-            .then(function (d) {
-              var out = "";
-              if (d.answer) {
-                if (d.mode === "algemeen") out += '<span class="ai-tag">Algemene kennis (AI)</span>';
-                if (d.mode === "web") out += '<span class="ai-tag">Van het web (AI)</span>'; // v206
-                out += esc(d.answer).replace(/\\n/g, "<br>");
-                if (d.sources && d.sources.length) out += '<div class="ai-src">' + d.sources.map(function (s) { return s.url ? '<a href="' + esc(s.url) + '"' + (String(s.url).indexOf("http") === 0 ? ' target="_blank" rel="noopener"' : "") + '>' + esc(s.title) + "</a>" : "<span>" + esc(s.title) + "</span>"; }).join("") + "</div>";
-              }
-              var tr = (d.treffers || []).reduce(function (a, g) { return a.concat(g.items.map(function (it) { return { g: g.label, t: it.titel, r: it.route }; })); }, []).slice(0, 6);
-              if (tr.length) {
-                out += '<div class="ai-tag" style="margin-top:' + (d.answer ? "10px" : "0") + '">Gevonden op het intranet</div><div class="ai-src">' + tr.map(function (x) { return '<a href="' + esc(x.r) + '">' + esc(x.t) + "</a>"; }).join("") + "</div>";
-              }
-              if (!out) out = esc("Niets gevonden — probeer andere woorden, of stel het als vraag.");
-              wait.innerHTML = out;
-              body.scrollTop = body.scrollHeight;
-            })
+          streamAsk(v, wait)
+            .catch(function () { return fallback(v, wait); })
             .catch(function () { wait.textContent = "Er ging iets mis — probeer het nog eens."; })
-            .then(function () { busy = false; });
+            .then(function () { busy = false; saveChat(); });
         });
       })();
     </script>

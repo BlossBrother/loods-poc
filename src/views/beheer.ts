@@ -13,6 +13,7 @@ import type {
 } from "../airtable";
 import { PUSH_FEATURES } from "../modules";
 import { TILE_ICONS, type Tile } from "../tiles";
+import { PULSE_DREMPEL, type PulseVraag, type PulseResultaat } from "../pulse";
 import type { NavLayout } from "../nav";
 import { svg } from "./layout";
 import { eyebrow } from "./loods";
@@ -45,6 +46,7 @@ const BEHEER_GROEPEN: BeheerGroep[] = [
     { href: "/beheer/modules", label: "Modules", desc: "Onderdelen aan/uit zetten", icon: "toggle" },
     { href: "/beheer/header", label: "Header & begroeting", desc: "Begroeting bovenaan home", icon: "news" },
     { href: "/beheer/tiles", label: "Snelkoppelingen", desc: "App-tegels op home (Buddee, TimeChimp, WK…)", icon: "toggle" },
+    { href: "/beheer/pulse", label: "Pulse", desc: "Anonieme peiling als kaart in de feed", icon: "alert" },
     { href: "/beheer/push", label: "Pushmelding", desc: "Stuur een melding naar collega's", icon: "bell" },
     { href: "/beheer/meldingen", label: "Meldingen-ontvangers", desc: "Wie krijgt de wekelijkse samenvatting", icon: "alert" },
     { href: "/beheer/bhv", label: "BHV-groep", desc: "Wie krijgt de noodmelding", icon: "sos" },
@@ -98,6 +100,70 @@ export function geenToegang() {
     <p class="muted">Deze pagina is alleen voor beheerders. Vraag een beheerder om je
       rol op "Beheerder" te zetten, of je e-mail toe te voegen aan de beheerderslijst.</p>
     <p><a href="/">← terug naar intranet</a></p>
+  `;
+}
+
+// Beheer → Pulse: anonieme peilingen. Eén actieve vraag; resultaten pas vanaf de drempel.
+function pulseResultaatKaart(r: PulseResultaat) {
+  return html`<article class="card" style="margin-top:14px">
+    <h2 style="margin-top:0">Resultaat — actieve vraag</h2>
+    <p style="font-weight:600">${r.vraag.vraag}</p>
+    ${!r.voldoende
+      ? html`<p class="muted">${r.totaal} ${r.totaal === 1 ? "reactie" : "reacties"} — resultaten verschijnen vanaf ${PULSE_DREMPEL} reacties (anonimiteit bij kleine groepen).</p>`
+      : html`
+        <p class="muted">${r.totaal} reacties${r.gemiddelde != null ? html` · gemiddelde ${r.gemiddelde.toFixed(1)}` : ""}</p>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+          ${r.verdeling.map((b) => {
+            const pct = r.totaal ? Math.round((b.aantal / r.totaal) * 100) : 0;
+            return html`<div class="row" style="gap:8px;align-items:center">
+              <span style="width:120px;flex:none;font-size:.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${b.label}</span>
+              <span style="flex:1;background:var(--line);border-radius:6px;height:14px;overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:var(--accent)"></span></span>
+              <span style="width:64px;flex:none;text-align:right;font-size:.8rem">${b.aantal} (${pct}%)</span>
+            </div>`;
+          })}
+        </div>`}
+  </article>`;
+}
+
+export function beheerPulse(vragen: PulseVraag[], actief: PulseResultaat | null, opts: { melding?: string } = {}) {
+  return html`
+    <h1>Pulse</h1>
+    ${opts.melding ? html`<p class="ok flash" data-toast>${opts.melding}</p>` : ""}
+    <p class="muted">Anonieme peilingen. Eén vraag tegelijk actief; die verschijnt als kaart op home.
+      Antwoorden zijn anoniem (niet te herleiden); resultaten worden pas getoond vanaf
+      ${PULSE_DREMPEL} reacties en niet per afdeling uitgesplitst (privacy bij kleine groepen).</p>
+
+    <form method="post" action="/beheer/pulse" class="card">
+      <h2 style="margin-top:0">Nieuwe vraag</h2>
+      <label>Vraag <input name="vraag" maxlength="160" required placeholder="Hoe is je werkweek?" /></label>
+      <fieldset style="border:0;padding:0;margin:12px 0 0">
+        <label class="row" style="gap:6px;font-weight:600"><input type="radio" name="type" value="schaal" checked /> Schaal 1–5 (oneens → eens)</label>
+        <label class="row" style="gap:6px;font-weight:600;margin-top:6px"><input type="radio" name="type" value="keuze" /> Meerkeuze</label>
+      </fieldset>
+      <label>Opties <span class="muted" style="font-size:.78rem">(alleen bij meerkeuze, één per regel)</span>
+        <textarea name="opties" rows="3" placeholder="Ja&#10;Nee&#10;Soms"></textarea>
+      </label>
+      <p class="muted" style="font-size:.8rem">Een nieuwe vraag activeren sluit de vorige automatisch.</p>
+      <button type="submit">Activeren</button>
+    </form>
+
+    ${actief ? pulseResultaatKaart(actief) : ""}
+
+    ${eyebrow("Eerdere vragen")}
+    <article class="card listcard">
+      ${vragen.length === 0
+        ? html`<p class="muted" style="margin:0">Nog geen pulse-vragen.</p>`
+        : html`<ul class="clean">
+            ${vragen.map((v) => html`<li class="row" style="gap:10px;align-items:center;justify-content:space-between">
+              <span style="min-width:0"><strong>${v.vraag}</strong>
+                <span class="muted" style="font-size:.8rem"> · ${v.type}${v.actief ? html` · <span class="tag">actief</span>` : " · gesloten"}</span></span>
+              ${v.actief
+                ? html`<form method="post" action="/beheer/pulse" style="margin:0;flex:none"><input type="hidden" name="sluit" value="${v.id}" /><button class="btn btn-soft" style="margin:0">Sluiten</button></form>`
+                : ""}
+            </li>`)}
+          </ul>`}
+    </article>
+    <p class="muted"><a href="/beheer">&larr; beheer</a></p>
   `;
 }
 
