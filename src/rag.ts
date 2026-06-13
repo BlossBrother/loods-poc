@@ -7,7 +7,7 @@ import type { Env } from "./airtable";
 // Centrale modelconfig (taak 1) — één plek, geïmporteerd door kennisdump.ts e.a.
 // Op 30-05-2026 zijn de kále llama-3.1-modellen (incl. 8b en 70b) uitgefaseerd;
 // alleen de -fp8-fast-variant overleeft. Gebruik exact deze string.
-export const EMBED_MODEL = "@cf/baai/bge-base-en-v1.5"; // 768 dims — moet matchen met de index
+export const EMBED_MODEL = "@cf/baai/bge-m3"; // R1: meertalig, 1024 dims — Vectorize-index MOET 1024 zijn (zie migratie)
 export const GEN_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"; // leestekst (kennisbank/web/algemeen)
 export const CLASS_MODEL = "@cf/meta/llama-3.2-3b-instruct"; // classificatie/scheidsrechter: snel, kwaliteit minder kritiek
 const TOP_K = 5;

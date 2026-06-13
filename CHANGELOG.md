@@ -9,6 +9,18 @@
 
 ---
 
+### v215 — AI-R1: meertalig embeddingmodel (bge-m3) + herindex-migratie  (PWA ff-v187)
+- `EMBED_MODEL` van `bge-base-en-v1.5` (Engels, 768 dims) naar **`@cf/baai/bge-m3`**
+  (meertalig, 1024 dims, goedkoper). Betere Nederlandse retrieval = vaker een raak
+  kennisbank-antwoord en minder doorvallen naar de trage web/algemeen-stap (pakt ook
+  de snelheidsklacht aan de bron). Nulmeting vóór: 20/46 vragen (~43%) door kennisbank.
+- **Migratie verplicht (Vectorize-index 768→1024, niet uitwisselbaar) — door PJ:**
+  `npx wrangler vectorize delete ff-kb` →
+  `npx wrangler vectorize create ff-kb --dimensions=1024 --metric=cosine` →
+  `npx wrangler vectorize create-metadata-index ff-kb --property-name=audience --type=string`.
+  Dán `push` + `npm run deploy`, dán herindexeren (Beheer → reindex / POST /api/kennisbank/reindex).
+  Tussen delete en reindex valt de kennisbank even leeg (assistent valt dan door naar web/algemeen).
+
 ### v214 — Hotfix: streaming-assistent viel niet door van kennisbank naar web/algemeen  (PWA ff-v186)
 - Symptoom (PJ): "Hoeveel mensen wonen er in Arnhem?" gaf "UIT DE KENNISBANK — ik kan
   dit niet vinden" i.p.v. een Tavily/algemeen-antwoord (v1.0 deed dat wél).

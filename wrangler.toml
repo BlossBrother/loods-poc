@@ -74,9 +74,12 @@ bucket_name = "ff-documenten"
 binding = "AI"
 
 # ---- Kennisbank/vraagbaak (RAG) — Vectorize -------------------------
-# Eenmalige setup vóór je dit aanzet:
-#   npx wrangler vectorize create ff-kb --dimensions=768 --metric=cosine
-# Index 'ff-kb' bestaat — binding actief. Na deploy: herindexeren via /zoek (beheerder).
+# R1 (v215): EMBED_MODEL = bge-m3 (1024 dims). De index moet OPNIEUW worden aangemaakt
+# op 1024 dims — 768-vectoren van bge-base zijn niet uitwisselbaar. Migratie:
+#   npx wrangler vectorize delete ff-kb
+#   npx wrangler vectorize create ff-kb --dimensions=1024 --metric=cosine
+#   npx wrangler vectorize create-metadata-index ff-kb --property-name=audience --type=string
+# Dan deployen en herindexeren (Beheer -> Kennisbank/zoek reindex, of POST /api/kennisbank/reindex).
 [[vectorize]]
 binding = "VECTORIZE"
 index_name = "ff-kb"
